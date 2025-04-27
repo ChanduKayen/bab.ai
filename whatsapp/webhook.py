@@ -18,6 +18,7 @@ async def verify(request: Request):
         return PlainTextResponse(params.get("hub.challenge", "0"))
     return PlainTextResponse("Invalid token", status_code=403)
 
+
 @router.post("/webhook")
 async def whatsapp_webhook(request: Request):
     try:
