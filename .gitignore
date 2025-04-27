@@ -1,3 +1,45 @@
+# Python artifacts
 __pycache__/
+*.py[cod]
+*.so
+
+# Environment files
 .env
+
+# Vector database files
 vectorstore/
+*.faiss
+*.pkl
+
+# OS-generated files
+.DS_Store
+Thumbs.db
+
+# Virtual environment folders
+venv/
+env/
+.venv/
+
+# FastAPI static/temp data (optional)
+static/
+temp/
+
+# Logs
+*.log
+
+# Tests outputs (optional if needed)
+htmlcov/
+.coverage
+
+# IDE/editor configs
+.vscode/
+.idea/
+*.swp
+
+# Jupyter Notebooks checkpoints (if you use any)
+.ipynb_checkpoints/
+
+# Package management
+pip-wheel-metadata/
+dist/
+build/
