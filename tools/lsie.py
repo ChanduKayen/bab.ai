@@ -12,7 +12,6 @@ SKU_CATALOG = [
     "PPC variant"
 ]
 
-
 @tool
 def _local_sku_intent_engine(query: str, quantity: str) -> dict:
     """

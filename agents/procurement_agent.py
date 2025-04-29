@@ -22,7 +22,6 @@ async def run_procurement_agent(state: dict) -> dict:
     system_prompt = """
 A customer sent the following material request:
 
-
 Given the user's message, extract:
 - material → combine brand name and material type (e.g., "Deccan TMT"). ALso note that dimenions, sizer variotions can be present the saem SKU. So present the SKU with different dimensions as a single SKU. ) Ex: Deccan TMT 20mm, Vizag TMT 8mm etc
 - quantity → size, count, or weight  be careful size doesent always mean quantity, it cana difretn version of the same SKU. Also note that the quantity can be a range (e.g., "100-200 bags")

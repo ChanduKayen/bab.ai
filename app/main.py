@@ -16,7 +16,6 @@ def read_root():
 def show_routes():  
     return [route.path for route in app.routes]
 
-
 for route in app.routes:
     print(" Registered route:", route.path)
     logger.info(f" Registered route: {route.path}")
