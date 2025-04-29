@@ -6,7 +6,7 @@ __pycache__/
 # Environment files
 .env
 
-# Vector database files
+# Vector database files (FAISS, local indexes)
 vectorstore/
 *.faiss
 *.pkl
@@ -19,15 +19,16 @@ Thumbs.db
 venv/
 env/
 .venv/
+newenv/
 
-# FastAPI static/temp data (optional)
+# FastAPI static/temp data
 static/
 temp/
 
 # Logs
 *.log
 
-# Tests outputs (optional if needed)
+# Tests outputs
 htmlcov/
 .coverage
 
@@ -36,10 +37,17 @@ htmlcov/
 .idea/
 *.swp
 
-# Jupyter Notebooks checkpoints (if you use any)
+# Jupyter Notebooks checkpoints
 .ipynb_checkpoints/
 
 # Package management
 pip-wheel-metadata/
 dist/
 build/
+
+# Unwanted copy temp files
+*copy.py
+
+# Backup and temp files
+*.bak
+*.tmp
