@@ -9,7 +9,8 @@ SKU_CATALOG = [
     "Deccan Cement",
     "Raasi Cement",
     "OPC variant",
-    "PPC variant"
+    "PPC variant",
+    "Iron"
 ]
 
 
