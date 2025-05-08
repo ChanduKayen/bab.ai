@@ -61,6 +61,8 @@ def build_vision_prompt(image_path, message_text=""):
 
     
 async def infer_intent_node(state: AgentState) -> AgentState:
+    print("$$$$$$$$$$Orchestrator called - infer_intent_node$$$$$$$$$$$")
+    print("State -", state)
     last_msg = state["messages"][-1]["content"]
     image_caption = state.get("caption", None)
     image_path = state.get("image_path", None)

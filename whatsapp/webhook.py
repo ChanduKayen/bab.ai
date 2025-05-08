@@ -7,10 +7,24 @@ from unitofconstruction.uoc_manager import UOCManager
 router = APIRouter()
 from app.logging_config import logger
 import requests
+import redis
+import json
 
 WHATSAPP_API_URL = "https://graph.facebook.com/v19.0/651218151406174/messages"
-ACCESS_TOKEN = "EAAIMZBw8BqsgBO0L6UPZCmS48FShZCeE6oHuIhycRPhRWObZC808vGV80fDez1lhfcI5RkPjd82ZCjsLq4ZBHYw4BZBbtg9iMbI2ODn8RxTffMsU0nwoZCY9dZCdvZBByFDuLNEgHXTh1m8qFZCTYZBbj7n30x2CZCByssZB9AK0t1WAZAT6LXJwYq2gXWrxwwZBxqp4PFBlzuAicEsZCgItNe3BVomNzgtSogaS1LwZDZD"  
+ACCESS_TOKEN = "EAAIMZBw8BqsgBOZBs5ZBYFPZAvHNmUodOn4EhliiKfwAYLOMZBf7ufHPMdUUwM2tyBMPqOWuIWKDn0bCXyjxyzmHJjuSBrKOlt11t92dve6bOVNKGmXIXW8ho6hZBsiaDQZBhOcDqi4vaSqv7EZCk7S8Mt04dXcIEI5eZCT4d4UtEVOt7uHKQZBnVjOJ0hJLlllgGuReuFRHCZArZApjDf1sAoP6cL2H65YZD"  
 #ACCESS_TOKEN = os.getenv("WHATSAPP_ACCESS_TOKEN")
+
+# implementing a presistnace layer to preseve the chat history tha saves the state of messages for followup questions required by UOC manager 
+r = redis.Redis(host='localhost', port=6379, decode_responses=True)
+
+def get_state(sender_id:str):
+    state_json = r.get(sender_id)
+    return json.loads(state_json) if state_json else {"sender_id": sender_id, "messages": []} 
+def save_state(sender_id:str, state:dict):
+    r.set(sender_id, json.dumps(state), ex=3600)  # Setting the expiration time to 1 hour
+
+#########################################################
+
 
 def send_whatsapp_message(to_number: str, message_text: str):
     headers = {
@@ -88,6 +102,8 @@ async def verify(request: Request):
 
 @router.post("/webhook")
 async def whatsapp_webhook(request: Request):
+    print("####Webhook Called####")
+    print("state:", request.state)
     try:
         logger.info("Entered Webhook route")
         data = await request.json()
@@ -104,12 +120,13 @@ async def whatsapp_webhook(request: Request):
         sender_id = msg["from"]
         msg_type = msg["type"]
 
-        state = {
-            "sender_id": sender_id,
-            "messages": [],  # We'll fill this based on type
-            #"uoc_last_called_by": None,  # Without declaring this variable here, it will be undefined in the first call to UOCManager
-            #"uoc_pending_question": False,
-        }
+        # state = {
+        #     "sender_id": sender_id,
+        #     "messages": [],  # We'll fill this based on type
+        #     #"uoc_last_called_by": None,  # Without declaring this variable here, it will be undefined in the first call to UOCManager
+        #     #"uoc_pending_question": False,
+        # }
+        state = get_state(sender_id)  # Retrieve the state from Redis
         
         if msg_type == "text":
             text = msg["text"]["body"]
@@ -145,28 +162,33 @@ async def whatsapp_webhook(request: Request):
         print("UOC pending question:", state.get("uoc_pending_question", False))
         print("UOC last called by:", state.get("uoc_last_called_by", "unknown"))
 
-        if  state.get("uoc_last_called_by") is None:  # checinkg it any agent called from uoc manager whic imokies it is a followup task 
-            print("Calling agent directly")
-            result = await builder_graph.ainvoke(state)
+        # if  state.get("uoc_last_called_by") is None:  # checinkg it any agent called from uoc manager whic imokies it is a followup task 
+        #     print("Calling agent directly")
+        #     result = await builder_graph.ainvoke(state)
             #state["uoc_last_called_by"] = result.get("agent_name", None)  # Set the agent name for future reference
-    
+            #save_state(sender_id, result)  # Save the updated state back to Redis
                  
         # Agent returned with UOC pending
         #if state.get("uoc_pending_question", False):
-        if  state.get("uoc_last_called_by") is not None:
-            # Call UOC Manager
+        if  state.get("uoc_pending_question") is True:  # checking if the uoc manager is pending a question to be answered by the user
             print("Calling UOC Manager")
-            state = await UOCManager.run(state, called_by=state.get("uoc_last_called_by", "unknown"))
+            followups_state = await UOCManager.run(state, called_by=state.get("uoc_last_called_by", "unknown"))
+            save_state(sender_id, followups_state)  # Save the updated state back to Redis
+            print("State saved")
+            print("Current state: ", get_state(sender_id))
+            send_whatsapp_message(sender_id, followups_state["messages"][-1]["content"])
+            return {"status": "waiting_for_user"}
+    
 
-            # Still unclear, ask user
-            if state.get("uoc_pending_question", False):
-                send_whatsapp_message(sender_id, state["messages"][-1]["content"])
-                return {"status": "waiting_for_user"}
-            
-            # UOC is now confident, resume agent
+        elif  state.get("uoc_pending_question") is False and state.get("uoc_confidence") in ["High"]:
+             # UOC is now confident, resume agent
             agent_name = state.get("uoc_last_called_by", "unknown")
-            result = await run_agent_by_name(agent_name, state)
-            #state["uoc_last_called_by"] = result.get("agent_name", None)
+            result = await run_agent_by_name(agent_name, state) 
+       # I feel this is unnessasary because if the the confidence is high the UOC manager must reutrn the state back to the calling agent there itself.
+            
+        elif state.get("uoc_pending_question") is False:
+            print("Calling agent directly")
+            result = await builder_graph.ainvoke(state)
 
         # Send final reply
         response_msg = result["messages"][-1]["content"]
