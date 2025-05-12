@@ -6,19 +6,13 @@ from langchain_openai import ChatOpenAI
 from langchain_core.messages import SystemMessage, HumanMessage
 import os
 from dotenv import load_dotenv
+from models.chatstate import AgentState
 from typing import TypedDict, List, Optional
 import base64  
 import openai  # Import the OpenAI module
 load_dotenv()  # lodad environment variables from .env file
 
 
-class AgentState(TypedDict):
-    messages: List[dict]
-    sender_id: str
-    intent: Optional[str]
-    image_path: Optional[str]  
-    media_id: Optional[str]
-    caption: Optional[str]
 
 
 builder_graph = StateGraph(AgentState)
@@ -96,26 +90,32 @@ async def infer_intent_node(state: AgentState) -> AgentState:
         HumanMessage(content=last_msg)
     ])
     
-    #
+    
 
     intent = chat_response.content.strip().lower()
     print("Found this intent -", intent)
     state["intent"] = intent
+    print("++++++++++++++State after intent inference in orchestrator", state)
+
     return state
 
 def intent_router(state: AgentState) -> str:
-    print("returning state:", state)
-    #intnt = state["intent"]
-    
-    
-    return state["intent"]
+     return state["intent"]
 
+
+#Added the cleanup to clear the state to avoid data leakage between next calls
+# This is a temporary solution, ideally we should have a better way to handle state management
+async def cleanup_node(state: AgentState) -> AgentState:
+    print("$$$$$$$$$$Orchestrator called - cleanup_node$$$$$$$$$$$")
+    state["messages"] = []
+    return state
 
 # Add node
 builder_graph.add_node("infer_intent", infer_intent_node)
 builder_graph.add_node("procurement", run_procurement_agent)
 #builder_graph.add_node("credit", run_credit_agent)
 builder_graph.add_node("siteops", run_siteops_agent)
+builder_graph.add_node("cleanup", cleanup_node)
 
 # Flow setup
 builder_graph.set_entry_point("infer_intent")
@@ -129,5 +129,9 @@ builder_graph.add_conditional_edges(
         "siteops": "siteops"
     }
 )
+
+
+builder_graph.add_edge("procurement", "cleanup")
+builder_graph.add_edge("siteops", "cleanup")
 
 builder_graph = builder_graph.compile()

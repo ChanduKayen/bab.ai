@@ -4,11 +4,13 @@ from tools.lsie import _local_sku_intent_engine
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import SystemMessage, HumanMessage
 from tools.context_engine import filter_tags, vector_search
+from models.chatstate import AgentState
 import os
 from dotenv import load_dotenv
 import json  
 import base64
 import openai
+
 from unitofconstruction.uoc_manager import UOCManager
 
 load_dotenv()  
@@ -28,15 +30,19 @@ def encode_image_base64(image_path: str) -> str:
     with open(image_path, "rb") as f:
         return base64.b64encode(f.read()).decode("utf-8")
 
-async def run_siteops_agent(state: dict) -> dict:
+#async def run_siteops_agent(state: dict) -> dict:
+async def run_siteops_agent(state: AgentState) -> AgentState:
     print("$$$$$$$$$$Siteops agent called $$$$$$$$$$$")
 
     if state.get("uoc_pending_question", False):
         print("UOCManager still clarifying — skipping agent reasoning.")
+        #dondakay = {"###########Likki is my": "****************dondakay"}
+        #rubbish = dondakay
+        #return rubbish
         return state
 
     is_first_time = state.get("agent_first_run", True) 
-
+    
     if is_first_time:    #next return happens only if there is a high confidence from the UOC mananger. Until the manager satisifies the loop continues. This can later re senstiivised for practical purposes like if the customer wont respond to the followup prompt.
         context = get_context(state)
         state["context_tags"] = context
@@ -45,6 +51,11 @@ async def run_siteops_agent(state: dict) -> dict:
         if state.get("uoc_confidence") == "low":
             print("UOCManager still clarifying — skipping agent reasoning.")
             state["agent_first_run"] = False #setting here makes sense because, even if the return is for one time it needs to be checked as false so that the next return will be  taken care of.  
+            
+            print("state from UOC  manager:", state)
+            #pakodi = {"###########Likki is my": "****************world"}
+            #rubbish = pakodi
+            #return rubbish #returning rubbish to make sure the state is not returned to webhook. This is a temporary fix. The state should be returned to webhook in the future.
             return state
 
         #state["agent_first_run"] = False # This can be missed and it will not be set because the if condition retuns the state to webhook. 
@@ -52,9 +63,12 @@ async def run_siteops_agent(state: dict) -> dict:
         print("Follow-up context — skipping extraction")
 
     reason_input = format_reasoning_input(state)
+    print("############Reasoning input:", reason_input)
     result = get_reason(state["context_tags"], reason_input) #CHANGE THIS - THIS IS INACURATE. KEPT FOR TIME BEING
-
+    print("Reasoning result:", result)
     state["messages"].append({"role": "assistant", "content": result})
+    #vada = {"###########Likki is my": "****************vada"}
+    #rubbish = vada
     return state
 
 def get_reason(context: list, last_msg: str) -> str:
@@ -140,3 +154,4 @@ def format_reasoning_input(state: dict):
     last_msg = state["messages"][-1]["content"]
     uoc_summary = json.dumps(state.get("uoc", {}).get("data", {}), indent=2)
     return f"{last_msg}\n\nUOC Context (This is the unit of construction we are referring to):\n{uoc_summary}"
+

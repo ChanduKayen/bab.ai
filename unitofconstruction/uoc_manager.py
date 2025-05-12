@@ -14,41 +14,61 @@ llm = ChatOpenAI(
     openai_api_key=os.getenv("OPENAI_API_KEY")
 )
 
+
 class UOCManager:
-    #confident_state = {}
     @staticmethod
     async def run(state: Dict, prompt: Optional[str] = None, called_by: Optional[str] = None) -> Dict:
-        print("$$$$$$$$$$UOCManager called $$$$$$$$$$$")
-        """
-        Tries to infer or build a UOC (Unit of Construction).
-        If confident, stores UOC to state.
-        If not, asks follow-up question via assistant message and flags pending state.
-        """
+        print("$$$$$$$$$$ UOCManager called $$$$$$$$$$$")
+
         chat_history = state.get("messages", [])
         uoc_state = state.get("uoc", {}).get("data") if state.get("uoc") else None
-    
+
         system_prompt = prompt or (
-            "You are an assistant that manages construction units (UOCs - Unit of Construction). "
-            "From the user's messages, identify or clarify the site, block, flat, or project being referred to. "
-            "Ask only the most relevant, minimal questions if UOC is unclear. "
-            "If confident, return the UOC as a JSON object with fields like: project_name, block, flat_number, floor, zone, or site_name."
-            "Ask freindly, if you know their name call them using thier name - be personal and supportive, very minimal occasional fun is allowed"
+            "You are a construction site assistant that identifies the Unit of Construction (UOC) from messages - terxt/ image. Try to deduce what the module is if you can (ex. dedeuce flat no, or work area like bnaathroom , staircase, etc., ).\n\n"
+            "A UOC may consist of:\n"
+            "- project_name\n"
+            "- block\n"
+            "- flat_number\n"
+            "- floor\n"
+            "- site_name\n\n"
+            "Your job:\n"
+            "1. If you find clear values for any of these fields, extract them into a JSON object.\n"
+            "2. If all fields are missing or unclear or if more information is needed develop a clear understading of the unit, reply with a very short friendly clarification question.\n"
+            "3. Do NOT ask for confirmation if values are already present.\n"
+            "4. Do NOT engage in small talk, jokes, or unnecessary comments.\n"
+            "5. Be direct, efficient, and helpful.\n\n"
+            "Example output (when confident):\n"
+            "{\n"
+            '    "project_name": "Bhaskar Heights",\n'
+            '    "block": "B",\n'
+            '    "flat_number": "504",\n'
+            '    "floor": "5th",\n'
+            '    "site_name": "Hyderabad"\n'
+            "}\n\n"
+            "Example output (when unclear):\n"
+            '"Could you please tell me which block or flat number you mean?"\n\n'
+            "ALWAYS prefer to extract data. Only ask a question if essential."
         )
 
         # Construct message chain
         messages = [SystemMessage(content=system_prompt)]
         for msg in chat_history:
             messages.append(HumanMessage(content=msg["content"]))
+
         if uoc_state:
-            messages.append(HumanMessage(content=f"Current known UOC state:\n{uoc_state}"))
+            messages.append(
+                HumanMessage(content=f"Current known UOC state:\n{uoc_state}")
+            )
 
         # Call LLM
         response = await llm.ainvoke(messages)
+        print("LLM response:", response)
         result = response.content.strip()
-        
+        print("LLM response in uoc manager :", result.startswith("{"))
         try:
-            if result.startswith("{") and "project" in result.lower():  # simple sanity check
-                parsed_uoc = eval(result)  # Use json.loads(result) if you're strict on input
+            if result.startswith("{"):
+                # confident extraction
+                parsed_uoc = eval(result)  # Replace with json.loads() for strict safety
                 state["uoc"] = {
                     "data": parsed_uoc,
                     "confidence": "high",
@@ -58,10 +78,8 @@ class UOCManager:
                 state["uoc_pending_question"] = False
                 state["uoc_last_called_by"] = called_by
                 print("UOC Updated with high confidence:", state)
-                #return state  #Send the state back tp calling agent
-                #UOCManager.confident_state = state
             else:
-                # Could not confidently infer UOC → ask user
+                # not confident → ask user
                 state["uoc_pending_question"] = True
                 state["uoc_confidence"] = "low"
                 state["uoc_last_called_by"] = called_by
@@ -70,6 +88,7 @@ class UOCManager:
                     "content": result
                 })
                 print("UOC in low confidence:", state)
+
         except Exception as e:
             # LLM reply was malformed or failed
             state["uoc_pending_question"] = True
@@ -77,7 +96,7 @@ class UOCManager:
             state["uoc_last_called_by"] = called_by
             state["messages"].append({
                 "role": "assistant",
-                "content": f" Couldn't process UOC: {e}"
+                "content": f"Couldn't process UOC: {e}"
             })
 
         return state

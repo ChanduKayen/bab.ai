@@ -1,0 +1,19 @@
+
+from typing import TypedDict, List, Optional
+
+
+class AgentState(TypedDict):
+    messages: List[dict]
+    sender_id: str
+    intent: Optional[str]
+    image_path: Optional[str]
+    media_id: Optional[str]
+    caption: Optional[str]
+    agent_first_run: Optional[bool]
+    uoc_pending_question: Optional[bool]
+    uoc_last_called_by: Optional[str]
+    uoc_confidence: Optional[str]
+    uoc: Optional[dict]
+    context_tags: Optional[str]
+    context: Optional[str]
+    context_tags: Optional[str]

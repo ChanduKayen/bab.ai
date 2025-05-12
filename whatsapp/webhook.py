@@ -8,20 +8,59 @@ router = APIRouter()
 from app.logging_config import logger
 import requests
 import redis
+import asyncio
 import json
-
+import agents.siteops_agent as siteops_agent
 WHATSAPP_API_URL = "https://graph.facebook.com/v19.0/651218151406174/messages"
-ACCESS_TOKEN = "EAAIMZBw8BqsgBOZBs5ZBYFPZAvHNmUodOn4EhliiKfwAYLOMZBf7ufHPMdUUwM2tyBMPqOWuIWKDn0bCXyjxyzmHJjuSBrKOlt11t92dve6bOVNKGmXIXW8ho6hZBsiaDQZBhOcDqi4vaSqv7EZCk7S8Mt04dXcIEI5eZCT4d4UtEVOt7uHKQZBnVjOJ0hJLlllgGuReuFRHCZArZApjDf1sAoP6cL2H65YZD"  
+ACCESS_TOKEN = "EAAIMZBw8BqsgBOzGZBIWtZAUWuD1e1qQkNcY1RnAmIi9Ld6ALJRDVSzZCC4bFRZCEKHThHXDmzMGQDp78PcBoL3HEOCPQBzY4oCfUxzxiCnhISCSqTZCaFidYuMkvXVrPcJqXp601c9k3lK1cjbrYtbnKs411MI9MGplrW0Me7x0QZCZBZBU0rSSTCoD9ZBkbvVD57xXvEs6jkw7dVWZABIN0ZAnLOzdwx8ZD"  
 #ACCESS_TOKEN = os.getenv("WHATSAPP_ACCESS_TOKEN")
 
 # implementing a presistnace layer to preseve the chat history tha saves the state of messages for followup questions required by UOC manager 
-r = redis.Redis(host='localhost', port=6379, decode_responses=True)
+#r = redis.Redis(host='localhost', port=6379, decode_responses=True)
+memory_store = {}
+def get_state(sender_id: str):
+    print("Getting state for sender_id:", sender_id)
+    return memory_store.get(sender_id)                      
+    
+    # try:
+    #     ############### Redis Connection Test ###############
+    #     ############### Uncomment for production ###############
+    #      r.ping()
+    #      print(" Redis connection successful")
+    # except redis.ConnectionError:
+    #     print(" Redis connection failed. Attempting to load state from backup.")
+    #     # Load state from backup or initialize a new state
+    #     return {
+    #         "sender_id": sender_id,   
+    #         "messages": [],
+    #         "agent_first_run": True,             
+    #         "uoc_pending_question": False,
+    #         "uoc_last_called_by": None,
+    #         "uoc_confidence": "low",
+    #         "uoc": {},                           
+    #     }
 
-def get_state(sender_id:str):
-    state_json = r.get(sender_id)
-    return json.loads(state_json) if state_json else {"sender_id": sender_id, "messages": []} 
+
+    # state_json = r.get(sender_id)
+    # try:
+    #     return json.loads(state_json) 
+    # except (TypeError, json.JSONDecodeError):
+    #     print("Failed to decode state for sender_id:", sender_id)
+    #     return {
+    #         "sender_id": sender_id,   
+    #         "messages": [],
+    #         "agent_first_run": True,             
+    #         "uoc_pending_question": False,
+    #         "uoc_last_called_by": None,
+    #         "uoc_confidence": "low",
+    #         "uoc": {},                           
+    #     }
+    
+
 def save_state(sender_id:str, state:dict):
-    r.set(sender_id, json.dumps(state), ex=3600)  # Setting the expiration time to 1 hour
+    memory_store[sender_id] = state
+    print("State saved method called")
+    # r.set(sender_id, json.dumps(state), ex=3600)  # Setting the expiration time to 1 hour
 
 #########################################################
 
@@ -103,7 +142,6 @@ async def verify(request: Request):
 @router.post("/webhook")
 async def whatsapp_webhook(request: Request):
     print("####Webhook Called####")
-    print("state:", request.state)
     try:
         logger.info("Entered Webhook route")
         data = await request.json()
@@ -127,7 +165,18 @@ async def whatsapp_webhook(request: Request):
         #     #"uoc_pending_question": False,
         # }
         state = get_state(sender_id)  # Retrieve the state from Redis
-        
+
+
+        if state is None:
+            state = {
+                "sender_id": sender_id,
+                "messages": [],  
+                "agent_first_run": True,             
+                "uoc_pending_question": False,
+                "uoc_last_called_by": None,
+                "uoc_confidence": "low",
+                "uoc": {},                           
+            }
         if msg_type == "text":
             text = msg["text"]["body"]
             state["messages"].append({"role": "user", "content": text})
@@ -150,6 +199,11 @@ async def whatsapp_webhook(request: Request):
 
         else:
             return {"status": "ignored", "reason": f"Unsupported message type {msg_type}"}
+
+
+
+
+
 
         # we are checking what the message is about and whom to call - orchastrator or agent; we call orcha strator first and if the respone is regarding an ongoin converstainpn to gain more context intiated by agetns the respone is direclty routed to agetns insted of orchestrator
         #result = await builder_graph.ainvoke(state)
@@ -175,27 +229,31 @@ async def whatsapp_webhook(request: Request):
             followups_state = await UOCManager.run(state, called_by=state.get("uoc_last_called_by", "unknown"))
             save_state(sender_id, followups_state)  # Save the updated state back to Redis
             print("State saved")
-            print("Current state: ", get_state(sender_id))
+            
             send_whatsapp_message(sender_id, followups_state["messages"][-1]["content"])
-            return {"status": "waiting_for_user"}
     
 
         elif  state.get("uoc_pending_question") is False and state.get("uoc_confidence") in ["High"]:
              # UOC is now confident, resume agent
             agent_name = state.get("uoc_last_called_by", "unknown")
             result = await run_agent_by_name(agent_name, state) 
-       # I feel this is unnessasary because if the the confidence is high the UOC manager must reutrn the state back to the calling agent there itself.
-            
+
+# UOC is now confident, resume the originally intended agent.
+# No need to go back to orchestrator (builder_graph) — decision was made earlier.
+#The main question may arise from the lack of clairty of who owns the control flow and the return path?  - Which is now addressed by the above code.
+             
         elif state.get("uoc_pending_question") is False:
             print("Calling agent directly")
             result = await builder_graph.ainvoke(state)
-
+            save_state(sender_id, result)
+            print("state afters saving", get_state(sender_id))
+            
         # Send final reply
         response_msg = result["messages"][-1]["content"]
         send_whatsapp_message(sender_id, response_msg)
         logger.info("Final response sent to WhatsApp")
         return {"status": "done", "reply": response_msg}
-
+    
     
     except Exception as e:
         logger.error("Error in WhatsApp webhook:{e}")
