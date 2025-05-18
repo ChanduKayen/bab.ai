@@ -1,4 +1,3 @@
-
 from typing import TypedDict, List, Optional
 
 
@@ -11,9 +10,16 @@ class AgentState(TypedDict):
     caption: Optional[str]
     agent_first_run: Optional[bool]
     uoc_pending_question: Optional[bool]
+    uoc_question_type: Optional[str]
     uoc_last_called_by: Optional[str]
     uoc_confidence: Optional[str]
     uoc: Optional[dict]
-    context_tags: Optional[str]
     context: Optional[str]
-    context_tags: Optional[str]
+    uoc_next_message_type: Optional[str]
+    uoc_next_message_extra_data: Optional[List[dict]]    
+    latest_respons: Optional[str]
+    project_setup_mode: Optional[bool]    
+    project_structure: Optional[dict]     
+    fuzzy_project_suggestion:Optional[dict]
+    active_project_id: Optional[str]         
+    

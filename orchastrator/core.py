@@ -107,7 +107,25 @@ def intent_router(state: AgentState) -> str:
 # This is a temporary solution, ideally we should have a better way to handle state management
 async def cleanup_node(state: AgentState) -> AgentState:
     print("$$$$$$$$$$Orchestrator called - cleanup_node$$$$$$$$$$$")
-    state["messages"] = []
+    state.pop("image_path", None)
+    state.pop("caption", None)
+    state.pop("media_id", None)
+    state.pop("context_tags", None) 
+    state.pop("context", None)
+    state.pop("uoc", None)  
+    state.pop("uoc_confidence", None)
+    state.pop("uoc_pending_question", None) 
+    state.pop("uoc_last_called_by", None)
+    state.pop("agent_first_run", None)  
+    state.pop("latest_response", None)
+    state.pop("messages", None)
+    state.pop("sender_id", None)
+    state.pop("intent", None)
+    state.pop("image_path", None)
+    state.pop("caption", None)
+    state.pop("media_id", None)
+    state.pop("context_tags", None)
+    state.pop("context", None)   
     return state
 
 # Add node

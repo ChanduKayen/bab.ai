@@ -11,18 +11,37 @@ import redis
 import asyncio
 import json
 import agents.siteops_agent as siteops_agent
+from whatsapp.builder_out import whatsapp_output
 WHATSAPP_API_URL = "https://graph.facebook.com/v19.0/651218151406174/messages"
-ACCESS_TOKEN = "EAAIMZBw8BqsgBOzGZBIWtZAUWuD1e1qQkNcY1RnAmIi9Ld6ALJRDVSzZCC4bFRZCEKHThHXDmzMGQDp78PcBoL3HEOCPQBzY4oCfUxzxiCnhISCSqTZCaFidYuMkvXVrPcJqXp601c9k3lK1cjbrYtbnKs411MI9MGplrW0Me7x0QZCZBZBU0rSSTCoD9ZBkbvVD57xXvEs6jkw7dVWZABIN0ZAnLOzdwx8ZD"  
+ACCESS_TOKEN = "EAAIMZBw8BqsgBOZBP0c9k3eITWoOyWIOJLYz2u1DtQcKdpWv6aK36o63j8KQ9qejEcrxCtTRsOV3rePOkKsbKaZBLE0FOnq45QyADtelogEjJK8dcAlYFMPd9lLHYUNuyEY4a3cHGjL0gdm423tTSg1wRyghGymAHspuW5bcK7YorCf9KeUGPaMLkCMf7fQsGqHkjViJr7MmL5YodDSfNMhP4oZD"  
 #ACCESS_TOKEN = os.getenv("WHATSAPP_ACCESS_TOKEN")
 
 # implementing a presistnace layer to preseve the chat history tha saves the state of messages for followup questions required by UOC manager 
 #r = redis.Redis(host='localhost', port=6379, decode_responses=True)
 memory_store = {}
+
+def send_typing_indicator(sender_id: str):
+    headers = {
+        "Authorization": f"Bearer {ACCESS_TOKEN}",
+        "Content-Type": "application/json"
+    }
+    payload = {
+        "messaging_product": "whatsapp",
+        "to": sender_id,
+        "type": "typing_on"
+    }
+    try:
+        response = requests.post(WHATSAPP_API_URL, headers=headers, json=payload)
+        print("Typing indicator sent:", response.status_code, response.text)
+    except Exception as e:
+        print("Failed to send typing indicator:", str(e))
+
+
 def get_state(sender_id: str):
     print("Getting state for sender_id:", sender_id)
     return memory_store.get(sender_id)                      
     
-    # try:
+    # try: 
     #     ############### Redis Connection Test ###############
     #     ############### Uncomment for production ###############
     #      r.ping()
@@ -65,20 +84,21 @@ def save_state(sender_id:str, state:dict):
 #########################################################
 
 
-def send_whatsapp_message(to_number: str, message_text: str):
-    headers = {
-        "Authorization": f"Bearer {ACCESS_TOKEN}",
-        "Content-Type": "application/json"
-    }
-    payload = {
-        "messaging_product": "whatsapp",
-        "to": to_number,
-        "type": "text",
-        "text": {"body": message_text}
-    }
+# def send_whatsapp_message(to_number: str, message_text: str):
+#     print("Sending message to WhatsApp:", to_number, message_text)
+#     headers = {
+#         "Authorization": f"Bearer {ACCESS_TOKEN}",
+#         "Content-Type": "application/json"
+#     }
+#     payload = {
+#         "messaging_product": "whatsapp",
+#         "to": to_number,
+#         "type": "text",
+#         "text": {"body": message_text}
+#     }
 
-    response = requests.post(WHATSAPP_API_URL, headers=headers, json=payload)
-    print(f"Sent message to {to_number}. Response:", response.status_code, response.text)
+#     response = requests.post(WHATSAPP_API_URL, headers=headers, json=payload)
+#     print(f"Sent message to {to_number}. Response:", response.status_code, response.text)
 
 logger.info("[STARTUP] webhook.py loaded successfully.")
 logger.info("Now testing the webhook route.")
@@ -196,6 +216,18 @@ async def whatsapp_webhook(request: Request):
             state["caption"] = caption
 
             print("#################################Image downloaded and saved at:", image_path)
+        elif msg_type == "interactive":
+            interactive_type = msg["interactive"]["type"]
+            if interactive_type == "button_reply":
+                reply_id = msg["interactive"]["button_reply"]["id"]
+            elif interactive_type == "list_reply":
+                reply_id = msg["interactive"]["list_reply"]["id"]
+            else:
+                reply_id = "unknown_interactive"
+    
+            state["messages"].append({"role": "user", "content": reply_id})
+            print(f"Captured interactive reply: {reply_id}")
+
 
         else:
             return {"status": "ignored", "reason": f"Unsupported message type {msg_type}"}
@@ -225,32 +257,74 @@ async def whatsapp_webhook(request: Request):
         # Agent returned with UOC pending
         #if state.get("uoc_pending_question", False):
         if  state.get("uoc_pending_question") is True:  # checking if the uoc manager is pending a question to be answered by the user
+            sender_id = state.get("sender_id")
             print("Calling UOC Manager")
-            followups_state = await UOCManager.run(state, called_by=state.get("uoc_last_called_by", "unknown"))
+            uoc_mgr = UOCManager() #Instantiate the class
+            if state["uoc_question_type"] == "project_formation":
+                print("*****Project fromation")
+                #print("State=====", state)
+                try:
+                    send_typing_indicator(sender_id)
+                    followups_state = await uoc_mgr.collect_project_structure_interactively(state)
+                except Exception as e:
+                    print("Error calling collect_project_structure_interactively:", e)
+                    import traceback; traceback.print_exc()
+          
+
+
+            elif state["uoc_question_type"] == "project_selection":
+                print("*****Project selection")
+                sender_id = state.get("sender_id")
+                send_typing_indicator(sender_id)
+                followups_state = await uoc_mgr.select_or_create_project(state, None)
+            else:
+                raise ValueError(f"Unknown uoc_question_type: {state['uoc_question_type']}")
+            
+            if followups_state.get("uoc_pending_question") is False and followups_state.get("uoc_confidence") in ["High"]:
+                print("9999999999999999999999999999999")
+                
+                send_typing_indicator(sender_id)
+                agent_name = followups_state.get("uoc_last_called_by", "uknown")
+                result = await run_agent_by_name(agent_name, state)
+
+
+            #followups_state = await UOCManager.run(state, called_by=state.get("uoc_last_called_by", "unknown"))
             save_state(sender_id, followups_state)  # Save the updated state back to Redis
             print("State saved")
+            print("followup state: ", followups_state)
             
-            send_whatsapp_message(sender_id, followups_state["messages"][-1]["content"])
+            response_msg= followups_state.get("latest_respons", "No response available.")
+            message_type= followups_state.get("uoc_next_message_type", "plain")
+            extra_data= followups_state.get("uoc_next_message_extra_data", None)
+            print("uoc_next_message_type ", message_type)
+            whatsapp_output(sender_id, response_msg, message_type=message_type, extra_data=extra_data)
     
-
-        elif  state.get("uoc_pending_question") is False and state.get("uoc_confidence") in ["High"]:
-             # UOC is now confident, resume agent
-            agent_name = state.get("uoc_last_called_by", "unknown")
-            result = await run_agent_by_name(agent_name, state) 
+        # This is redundant because the uoc_confidence -> high state is handled in UOC manager and that state is sent to the agent directly. There wont be a response back to the user when the state is high. 
+        # elif  state.get("uoc_pending_question") is False and state.get("uoc_confidence") in ["High"]:
+        #      # UOC is now confident, resume agent
+        #     agent_name = state.get("uoc_last_called_by", "unknown")
+        #     result = await run_agent_by_name(agent_name, state) 
 
 # UOC is now confident, resume the originally intended agent.
 # No need to go back to orchestrator (builder_graph) — decision was made earlier.
 #The main question may arise from the lack of clairty of who owns the control flow and the return path?  - Which is now addressed by the above code.
              
         elif state.get("uoc_pending_question") is False:
-            print("Calling agent directly")
+            print("Calling orch ")
+            send_typing_indicator(sender_id)
             result = await builder_graph.ainvoke(state)
             save_state(sender_id, result)
             print("state afters saving", get_state(sender_id))
-            
+            # print("result after saving in condition ", result)
         # Send final reply
-        response_msg = result["messages"][-1]["content"]
-        send_whatsapp_message(sender_id, response_msg)
+        #response_msg = state["latest_response"] if "latest_response" in state else "No response available."
+        #response_msg = result["messages"][-1]["content"] if "messages" in result else "No response available."
+        response_msg= result.get("latest_respons", "No response available.")
+        message_type= result.get("uoc_next_message_type", "plain")
+        extra_data= result.get("uoc_next_message_extra_data", None)
+        print("extra data", extra_data)
+        print("Message type", message_type)
+        whatsapp_output(sender_id, response_msg, message_type=message_type, extra_data=extra_data)
         logger.info("Final response sent to WhatsApp")
         return {"status": "done", "reply": response_msg}
     

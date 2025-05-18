@@ -1,4 +1,4 @@
-# agents/procurement_agent.py
+# agents/siteops_agent.py
 
 from tools.lsie import _local_sku_intent_engine
 from langchain_openai import ChatOpenAI
@@ -7,90 +7,81 @@ from tools.context_engine import filter_tags, vector_search
 from models.chatstate import AgentState
 import os
 from dotenv import load_dotenv
-import json  
+import json
 import base64
 import openai
-
 from unitofconstruction.uoc_manager import UOCManager
 
-load_dotenv()  
+
+load_dotenv()
+
 llm_reasoning = ChatOpenAI(
     model="gpt-4o",
     temperature=0,
     openai_api_key=os.getenv("OPENAI_API_KEY")
-)   
+)
 
 llm_context = ChatOpenAI(
     model="gpt-3.5-turbo",
     temperature=0,
     openai_api_key=os.getenv("OPENAI_API_KEY")
-)   
+)
 
 def encode_image_base64(image_path: str) -> str:
     with open(image_path, "rb") as f:
         return base64.b64encode(f.read()).decode("utf-8")
 
-#async def run_siteops_agent(state: dict) -> dict:
 async def run_siteops_agent(state: AgentState) -> AgentState:
-    print("$$$$$$$$$$Siteops agent called $$$$$$$$$$$")
+    print("$$$$$$$$$$ Siteops agent called $$$$$$$$$$$")
 
-    if state.get("uoc_pending_question", False):
-        print("UOCManager still clarifying — skipping agent reasoning.")
-        #dondakay = {"###########Likki is my": "****************dondakay"}
-        #rubbish = dondakay
-        #return rubbish
-        return state
+    # if state.get("uoc_pending_question", False):
+    #     print("UOCManager still clarifying — skipping agent reasoning.")
+    #     return state
 
-    is_first_time = state.get("agent_first_run", True) 
-    
-    if is_first_time:    #next return happens only if there is a high confidence from the UOC mananger. Until the manager satisifies the loop continues. This can later re senstiivised for practical purposes like if the customer wont respond to the followup prompt.
+    is_first_time = state.get("agent_first_run", True)
+
+    if is_first_time:
+       # I think we need to get use the messaage to and get the struture and details of the UOC first. The UOC hanndles the state with the found project structure else it will ask the user for the missing details.
+       #    Get the message user sent 
+       #    send the message back to the UOC manager to get the project structure and details
+       #    The UOC manager sends teh state back with the found or created project.
+       #    Now work on that particular project until a new project work is called 
+        uoc_manager = UOCManager()
+        state = await uoc_manager.resolve_uoc(state)
         context = get_context(state)
-        state["context_tags"] = context
-
-        state = await UOCManager.run(state, called_by="siteops")
+        print("@@@@@@@@@@@@@@@@@@@@@@@ Context extracted:", context)
+        state["context"] = context
+        #state = await UOCManager. run(state, called_by="siteops")
+        
+        
         if state.get("uoc_confidence") == "low":
             print("UOCManager still clarifying — skipping agent reasoning.")
-            state["agent_first_run"] = False #setting here makes sense because, even if the return is for one time it needs to be checked as false so that the next return will be  taken care of.  
-            
-            print("state from UOC  manager:", state)
-            #pakodi = {"###########Likki is my": "****************world"}
-            #rubbish = pakodi
-            #return rubbish #returning rubbish to make sure the state is not returned to webhook. This is a temporary fix. The state should be returned to webhook in the future.
+            state["agent_first_run"] = False
+            print("State from UOC manager:", state)
             return state
-
-        #state["agent_first_run"] = False # This can be missed and it will not be set because the if condition retuns the state to webhook. 
     else:
         print("Follow-up context — skipping extraction")
 
     reason_input = format_reasoning_input(state)
-    print("############Reasoning input:", reason_input)
-    result = get_reason(state["context_tags"], reason_input) #CHANGE THIS - THIS IS INACURATE. KEPT FOR TIME BEING
-    print("Reasoning result:", result)
+    print("############ Reasoning input:", reason_input)
+
+    result = get_reason(state, reason_input)
+    print("///////////////Reasoning result:", result)
+
+    state["latest_response"] = result
+    print("----------------------------------------------------------------state:", state)
     state["messages"].append({"role": "assistant", "content": result})
-    #vada = {"###########Likki is my": "****************vada"}
-    #rubbish = vada
+
     return state
 
-def get_reason(context: list, last_msg: str) -> str:
-    system_prompt = (
-        "You are a construction reasoning assistant. "
-        "You are provided with a site update and supporting context (like IS codes, complaints, tips). "
-        "Use the context only as background grounding — do not blindly repeat or enforce everything from it. "
-        "Reason independently but draw upon relevant context where it strengthens your conclusion. "
-        "Respond concisely in the following format:\n"
-        "Risks -if any, one line only;\n"
-        "Actionable Items -bullet points, max 3;\n"
-        "Preparations for Next Stage -if required, bullet points, max 2."
-        "Potentail financial impact -if any, one line only ; \n"
-        "No verbose answers"
-        "Respond in regional language like telugu if you feel necessary, else respond in english.\n"
-        "If the context is not relevant to the site update, say 'No relevant context found'.\n"   
-    )
+def get_reason(state: dict, reasoning_input: str) -> str:
+    system_prompt = reasoning_prompt()
+    context = state.get("context_tags", "")
+    uoc_summary = json.dumps(state.get("uoc", {}).get("data", {}), indent=2)
 
     chat_response = llm_reasoning.invoke([
         SystemMessage(content=system_prompt),
-        HumanMessage(content=last_msg),
-        HumanMessage(content="Relevant context (for your reference):\n" + "\n- " + "\n- ".join(context))
+        HumanMessage(content=f"User message:\n{reasoning_input}\n\nContext:\n{context}\n\nUOC State:\n{uoc_summary}")
     ])
 
     return chat_response.content.strip()
@@ -99,7 +90,7 @@ def get_context(state: dict):
     last_msg = state["messages"][-1]["content"]
     image_path = state.get("image_path")
     image_caption = state.get("caption", None)
-    combined_input = f"Message: {last_msg}\ncaption: {image_caption}".strip()
+    combined_input = f"Message: {last_msg}\nCaption: {image_caption}".strip()
 
     if image_path:
         image_base64 = encode_image_base64(image_path)
@@ -107,51 +98,70 @@ def get_context(state: dict):
         vision_response = openai.chat.completions.create(
             model="gpt-4o",
             messages=[
-                {
-                    "role": "system",
-                    "content": (
-                        "You are an assistant analyzing construction site photos.\n"
-                        "Describe the visible work, including the component, stage of work, and location hints.\n"
-                        "Be concise and objective. If nothing meaningful is visible, say so."
-                    )
-                },
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "text", "text": combined_input},
-                        {
-                            "type": "image_url",
-                            "image_url": {
-                                "url": f"data:image/jpeg;base64,{image_base64}"
-                            }
-                        }
-                    ]
-                }
+                {"role": "system", "content": system_prompt()},
+                {"role": "user", "content": [
+                    {"type": "text", "text": combined_input},
+                    {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{image_base64}"}}
+                ]}
             ],
             max_tokens=300
         )
-        gained_context = vision_response.choices[0].message.content.strip() 
-        print("Vision response:", gained_context)
-        return gained_context
-    else:
-        query_params = llm_context.invoke([
-            SystemMessage(
-                content=(
-                    "Extract the following information from the user's message and return it in this JSON format: "
-                    "{\"component\": \"...\", \"stage\": \"...\", \"zone\": \"...\"}. "
-                    "Definitions:\n"
-                    "- component: the physical item the work is being done on, such as a wall, slab, column, beam, footing, shaft, or roof.\n"
-                    "- stage: the specific activity being performed on the component, such as plastering, curing, brickwork, etc. Avoid generic actions like 'working' or 'doing'. If no stage is clearly mentioned, leave it blank.\n"
-                    "- zone: the location where the work is happening, such as ground floor, first floor, second floor, flat numbers, directions (e.g., south-east corner), or blocks.\n"
-                    "Return only the JSON."
-                )
-            ),
-            HumanMessage(content=combined_input)
-        ]).content.strip()
-        return query_params
+        return vision_response.choices[0].message.content.strip()
 
-def format_reasoning_input(state: dict):
+    query_response = llm_context.invoke([
+        SystemMessage(content=system_prompt()),
+        HumanMessage(content=combined_input)
+    ])
+
+    return query_response.content.strip()
+
+def system_prompt() -> str:
+    return """
+You are a construction site quality assistant trained to analyze BOTH photos and text updates from Indian construction sites. Your job is to summarize the work and enrich the builder with best practices, realistic insights, and possible risks. Follow this structure:
+ Understanding
+- Analyze photos and text together.
+
+Describe Work
+- Component:
+- Stage of Work:
+- Location Hints:
+- Observation:
+
+Enrich with Contextual Knowledge
+A) Guidelines (IS codes + standard practices)
+B) Realistic Understanding (Field practice)
+C) Common Problems / Complaints
+D) Possible Risks
+
+Rules:
+- Be factual, detailed, informative and structured.
+- Avoid assumptions beyond input + verified knowledge.
+- If nothing is found, say "No meaningful construction work or update is detected in this input."
+"""
+
+def reasoning_prompt() -> str:
+    return """
+You are a construction site reasoning assistant. You are provided with:
+1. User message (site update)
+2. Context (IS codes, complaints, field tips)
+3. UOC State (site meta info)
+
+Your task:
+- Compare the site update with the context + UOC state.
+- Analyze and suggest if work reported matches expected work (yes/no + why).
+- List any gaps, risks, or anomalies.
+- Suggest actionable next steps.
+- Provide recommendations for quality, safety, or sequencing.
+
+Format:
+Risks: (One line)
+Actionable Items: (Up to 3 bullet points)
+Next Stage Preparations: (Up to 2 bullet points)
+Potential Financial Impact: (One line)
+
+Respond concisely. If no data is sufficient, say 'No relevant comparison possible'.
+"""
+
+def format_reasoning_input(state: dict) -> str:
     last_msg = state["messages"][-1]["content"]
-    uoc_summary = json.dumps(state.get("uoc", {}).get("data", {}), indent=2)
-    return f"{last_msg}\n\nUOC Context (This is the unit of construction we are referring to):\n{uoc_summary}"
-
+    return last_msg
