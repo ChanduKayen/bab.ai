@@ -27,6 +27,7 @@ class ProjectDatabase:
         return self.user_projects.get(sender_id, [])
 
     def save_project_for_user(self, sender_id: str, project_id: str, project_structure: dict):
+        print("UOC Manager:::::: save_project_for_user::::: -- Saved Project, details: --", sender_id, "Project ID:", project_id)
         if sender_id not in self.user_projects:
             self.user_projects[sender_id] = []
         self.user_projects[sender_id].append({
@@ -66,11 +67,11 @@ class UOCManager:
         prompt = "Extract the possible project name or block reference from this text. Return onlly the project name if found, empty string if nothing found. No comments, no explanations, nothing"
         messages = [SystemMessage(content=prompt), HumanMessage(content=caption_text)]
         response = await self.llm.ainvoke(messages)
-        print("The possible project name' sLLM resoponse is ", response.content.strip())
+        print("UOC Manager:::::: extract_possible_project_name::::: --The possible project name's LLM resoponse is --", response.content.strip())
         return response.content.strip()
 
     async def select_or_create_project(self, state: Dict, possible_project_name: Optional[str]) -> Dict:
-        print("Called select or create project>>>>>>>>")
+        print("UOC Manager:::::: select_or_create_project:::::  -- Called this function with a potential project name  --", possible_project_name)
         sender_id = state["sender_id"]
         user_projects = self.project_db.get_projects_for_user(sender_id)
         user_message = state.get("messages", [])[-1]["content"].strip().lower() if state.get("messages") else ""
@@ -138,27 +139,26 @@ class UOCManager:
         return await self.collect_project_structure_interactively(state)
 
 
-    async def resolve_uoc(self,  state: Dict) -> Dict:
-        print("$$$$$$$$$$ UOCManager called $$$$$$$$$$$")
+    async def resolve_uoc(self,  state: Dict, uoc_last_called_by: str ) -> Dict:
+        print("UOC Manager:::::: resolve_uoc:::::  -- Called UOC Manager")
+        state["uoc_last_called_by"] = uoc_last_called_by
         message = state.get("messages", [])[-1]["content"].strip() if state.get("messages") else ""
-        print("User message:", message)
         user_input = state.get("caption") or message or ""
         possible_project_name = await self.extract_possible_project_name(user_input)
-        print("possible projeect name is : ", possible_project_name)
         state= await self.select_or_create_project(state, possible_project_name)
-         
+        print("UOC Manager:::::: resolve_uoc::::: -- State after the project selection/ creation : --", state)
+
 
         if state.get("uoc_pending_question"):
-            print("UOCManager has a question, sending the state baclk to the agent.")
-            state["uoc_confidence"] = "low"
-            print("The state before sending the response back to agent ", state)
+            state["UOC Manager:::::: uoc_confidence"] = "low"
+            print("UOC Manager:::::: resolve_uoc:::::  <uoc_pending_question Yes> --UOCManager has a question, sending the resonse back to siteops Agent--")
             return state
         active_project_id = state.get("active_project_id")
-        print("Active project ID:", active_project_id)
+        print("UOC Manager:::::: resolve_uoc:::::   --Active project Set :-- ", active_project_id)
         
-        if active_project_id not in state:
-            print("Waiting for confirmation on project selection.")
-            return state
+        # if active_project_id not in state:
+        #     print("UOC Manager:::::: resolve_uoc::::: <active_project_id No>  Waiting for confirmation on project selection.")
+        #     return state
         
         structure = self.project_db.get_project_structure(
         state["sender_id"], state["active_project_id"])
@@ -207,7 +207,7 @@ class UOCManager:
 
         return state
     async def collect_project_structure_interactively(self, state: Dict) -> Dict:
-        print("Called collect_project_structure_interactively>>>>>>>>")
+        print("UOC Manager:::::: collect_project_structure_interactively:::::: -- Started collecting details--")
     
         """LLM driven progressive project setup conversation."""
         chat_history = state.get("messages", [])
@@ -242,7 +242,7 @@ class UOCManager:
     " Output Format — STRICT JSON only, in the exact shape below. Never add explanations, commentary, or markdown:\n"
     "{\n"
     '  "uoc": { ...fields extracted so far... },\n'
-    '  "latest_respons": "The next friendly question to ask the user",\n'
+    '  "latest_respons": "The next friendly question to ask the user" | Empty string if the required conditions are met,\n'
     '  "next_message_type": "plain" | "button" | "list",\n'
     '  "next_message_extra_data": [ options list if applicable, else null ],\n'
     '  "uoc_pending_question": true | false\n'
@@ -263,18 +263,19 @@ class UOCManager:
         
         try:
             parsed = json.loads(result)
-            print("Parsed respopnse is :", parsed["latest_respons"])
+            print("UOC Manager:::::: collect_project_structure_interactively::::::  -- Parsed respnose from LLM is :", parsed["latest_respons"])
             
             pending_question = parsed["uoc_pending_question"]
-            print("))))))))))))))) Pending question:", pending_question)
             if not pending_question:
+                print("UOC Manager:::::: collect_project_structure_interactively:::::: <pending_question No> -- UOC is confident, Returning state to calling function  --")
                 state["uoc_pending_question"] = False
                 state["uoc_confidence"] = "high"
                 state["uoc_question_type"] = None
                 state["latest_respons"] = ""
                 return state
 
-            if "uoc" in parsed:
+            if "uoc" in parsed and isinstance(parsed["uoc"], dict):
+                print("UOC Manager:::::: collect_project_structure_interactively:::::: <uoc  found in prased> -- Setting project structure  --")
                 project_structure.update(parsed["uoc"])
                 state["project_structure"] = project_structure
                 
@@ -286,14 +287,21 @@ class UOCManager:
                 state["uoc_next_message_extra_data"] = parsed.get("next_message_extra_data", None)
                 state["uoc_pending_question"] = True
                 state["uoc_question_type"] = "project_formation"
-            state["uoc_confidence"] = "low" if state["uoc_pending_question"] else "high"
+                if state["uoc_pending_question"]:
+                    state["uoc_confidence"] = "low"
+                    #state["poject_setup_done"] = False
+                else:
+                    state["uoc_confidence"] = "high"
+                    self.project_db.save_project_for_user(state["sender_id"], state["active_project_id"], project_structure)
+                    #state["poject_setup_done"] = True
+            #state["uoc_confidence"] = "low" if state["uoc_pending_question"] else "high"
         except Exception as e:
             state["uoc_pending_question"] = True
             state["uoc_confidence"] = "low"
             state["messages"].append({"role": "assistant", "content": "I'm unable to parse that. Could you please provide the project details again?"})
-            print("State after a run in create collect project details interactively:::::", state)
+        print("UOC Manager:::::: Collect_project_structure_interactively::::::  -- Final State in this method --", state)
         return state
-
+  
     async def extract_candidate_fields(self, message: str, project_structure: Dict) -> Optional[Dict]:
         """LLM extraction of candidate region fields."""
         system_prompt = "You are a site assistant. Extract: project_name, block, floor, flat_number, region_name, region_type from user input."
@@ -305,10 +313,10 @@ class UOCManager:
         except Exception:
             pass
         return None
-
+    
     def build_region_id(self, block: str, floor: int, flat_number: int, region_type: str) -> str:
         return f"{block}-{floor}-{flat_number}-{region_type}"
-
+    
     def create_missing_layers(self, state: Dict, extracted: Dict) -> Dict:
         blocks = state.setdefault("uoc_state", {}).setdefault("blocks", {})
         block = blocks.setdefault(extracted["block"], {})

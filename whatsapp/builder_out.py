@@ -1,7 +1,7 @@
 import requests
 
 WHATSAPP_API_URL = "https://graph.facebook.com/v19.0/651218151406174/messages"
-ACCESS_TOKEN = "EAAIMZBw8BqsgBOZBP0c9k3eITWoOyWIOJLYz2u1DtQcKdpWv6aK36o63j8KQ9qejEcrxCtTRsOV3rePOkKsbKaZBLE0FOnq45QyADtelogEjJK8dcAlYFMPd9lLHYUNuyEY4a3cHGjL0gdm423tTSg1wRyghGymAHspuW5bcK7YorCf9KeUGPaMLkCMf7fQsGqHkjViJr7MmL5YodDSfNMhP4oZD"  
+ACCESS_TOKEN = "EAAIMZBw8BqsgBOzp2wEbgEHYfjZC66ZC7awz0X8MOKdDOlXHZBrHeQLYDrm86BxJoliZBMv6asJbFMtOwGemZAxujYw3Vsqzr1APZCfdc0C9WIeW9pnskZCSkDI95Mw1XGsxtxxZCzodcAzKJp0mpnQmOjAvpKbZC2SlnZBiQMZC9ObDvZB3cZCzZBaZCQLoBb3pMG3iBffmlPzU6ZC9oyBHPZALicbolC4dDVc81QmoMZD"  
 
 
 def whatsapp_output(to_number: str, message_text: str, message_type="plain", extra_data=None):

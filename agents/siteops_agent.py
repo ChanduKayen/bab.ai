@@ -32,7 +32,7 @@ def encode_image_base64(image_path: str) -> str:
         return base64.b64encode(f.read()).decode("utf-8")
 
 async def run_siteops_agent(state: AgentState) -> AgentState:
-    print("$$$$$$$$$$ Siteops agent called $$$$$$$$$$$")
+    print("SiteOps Agent::::: run_siteops_agent::::: -- Siteops agent called -- ")
 
     # if state.get("uoc_pending_question", False):
     #     print("UOCManager still clarifying — skipping agent reasoning.")
@@ -47,31 +47,31 @@ async def run_siteops_agent(state: AgentState) -> AgentState:
        #    The UOC manager sends teh state back with the found or created project.
        #    Now work on that particular project until a new project work is called 
         uoc_manager = UOCManager()
-        state = await uoc_manager.resolve_uoc(state)
+        state = await uoc_manager.resolve_uoc(state, "siteops" )
         context = get_context(state)
-        print("@@@@@@@@@@@@@@@@@@@@@@@ Context extracted:", context)
+        print("SiteOps Agent::::: run_siteops_agent::::: <is_first_time Yes>  --Stage 1: Context extracted after resolution from UOC Manager: --", context)
         state["context"] = context
         #state = await UOCManager. run(state, called_by="siteops")
         
         
         if state.get("uoc_confidence") == "low":
-            print("UOCManager still clarifying — skipping agent reasoning.")
+            print("SiteOps Agent::::: run_siteops_agent::::: <is_first_time Yes>::::: <uoc_confidence Low> --Stage 1:  Confience low, returing state without reasoning, state : --", state)
             state["agent_first_run"] = False
-            print("State from UOC manager:", state)
+            #print("SiteOps Agent::::: State from UOC manager:", state)
             return state
     else:
-        print("Follow-up context — skipping extraction")
-
+        print("SiteOps Agent::::: run_siteops_agent::::: <is_first_time NO > -- Not first run, using existing state")
     reason_input = format_reasoning_input(state)
-    print("############ Reasoning input:", reason_input)
+    state["uoc_confidence"]= "high"  # Assuming high confidence for reasoning stage
+    state["uoc_pending_question"] = False  # Reset pending question flag for reasoning stage
+    print("SiteOps Agent::::: run_siteops_agent::::: -- Stage 2: Preparing reasoning stage, Attributes -- ", reason_input)
 
     result = get_reason(state, reason_input)
-    print("///////////////Reasoning result:", result)
+    print("SiteOps Agent::::: run_siteops_agent::::: -- Stage 2: Reasoning Result: -- ", result)
 
     state["latest_response"] = result
-    print("----------------------------------------------------------------state:", state)
     state["messages"].append({"role": "assistant", "content": result})
-
+    state["agent_first_run"] = False
     return state
 
 def get_reason(state: dict, reasoning_input: str) -> str:

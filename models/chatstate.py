@@ -21,5 +21,6 @@ class AgentState(TypedDict):
     project_setup_mode: Optional[bool]    
     project_structure: Optional[dict]     
     fuzzy_project_suggestion:Optional[dict]
+    #poject_setup_done:Optional[bool]
     active_project_id: Optional[str]         
     

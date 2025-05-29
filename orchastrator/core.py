@@ -55,8 +55,7 @@ def build_vision_prompt(image_path, message_text=""):
 
     
 async def infer_intent_node(state: AgentState) -> AgentState:
-    print("$$$$$$$$$$Orchestrator called - infer_intent_node$$$$$$$$$$$")
-    print("State -", state)
+    print("Orchestrator::::: infer_intent_node::::: -- Orchestrator called -- ", state)
     last_msg = state["messages"][-1]["content"]
     image_caption = state.get("caption", None)
     image_path = state.get("image_path", None)
@@ -65,7 +64,7 @@ async def infer_intent_node(state: AgentState) -> AgentState:
 
     
     if image_path:
-        print("Image path found -", image_path)
+        print("Orchestrator::::: infer_intent_node:::::  --Image path found: --", image_path)
         messages = build_vision_prompt(image_path=image_path, message_text=combined_input)
         response = openai.chat.completions.create(
             model="gpt-4o",
@@ -73,7 +72,7 @@ async def infer_intent_node(state: AgentState) -> AgentState:
             max_tokens=10
         )
         state["intent"] = response.choices[0].message.content.strip().lower()
-        print("Intent of image found -", state["intent"])
+        print("Orchestrator::::: infer_intent_node:::::  --Intent of image found: --", state["intent"])
         return state
 
 
@@ -93,9 +92,9 @@ async def infer_intent_node(state: AgentState) -> AgentState:
     
 
     intent = chat_response.content.strip().lower()
-    print("Found this intent -", intent)
+    print("Orchestrator::::: infer_intent_node:::::  --Intent of text found: --", intent)
     state["intent"] = intent
-    print("++++++++++++++State after intent inference in orchestrator", state)
+    #print("Orchestrator::::: ++++++++++++++State after intent inference in orchestrator", state)
 
     return state
 
@@ -106,7 +105,6 @@ def intent_router(state: AgentState) -> str:
 #Added the cleanup to clear the state to avoid data leakage between next calls
 # This is a temporary solution, ideally we should have a better way to handle state management
 async def cleanup_node(state: AgentState) -> AgentState:
-    print("$$$$$$$$$$Orchestrator called - cleanup_node$$$$$$$$$$$")
     state.pop("image_path", None)
     state.pop("caption", None)
     state.pop("media_id", None)
@@ -125,7 +123,8 @@ async def cleanup_node(state: AgentState) -> AgentState:
     state.pop("caption", None)
     state.pop("media_id", None)
     state.pop("context_tags", None)
-    state.pop("context", None)   
+    state.pop("context", None) 
+    print("Orchestrator::::: cleanup_node::::: --Cleaned up state -- ", state) 
     return state
 
 # Add node
