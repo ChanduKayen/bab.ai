@@ -1,6 +1,7 @@
 import os
 import json
 from typing import Dict, Optional, List
+import random
 from datetime import datetime
 from dotenv import load_dotenv
 from rapidfuzz import fuzz
@@ -19,6 +20,7 @@ def clean_llm_response(raw_text: str) -> str:
     return raw_text.strip().replace("```json", "").replace("```", "")
 
 
+    user_name = None
 class ProjectDatabase:
     def __init__(self):
         self.user_projects = {}  # Temporary in-memory DB
@@ -74,10 +76,13 @@ class UOCManager:
         print("UOC Manager:::::: select_or_create_project:::::  -- Called this function with a potential project name  --", possible_project_name)
         sender_id = state["sender_id"]
         user_projects = self.project_db.get_projects_for_user(sender_id)
-        user_message = state.get("messages", [])[-1]["content"].strip().lower() if state.get("messages") else ""
+        user_message = (
+            state.get("messages", [])[-1].get("content", "").strip().lower()
+            if state.get("messages") else "")
 
     # 1. If user is responding to a fuzzy match confirmation
         if state.get("uoc_pending_question") and "fuzzy_project_suggestion" in state:
+            print("UOC Manager:::::: select_or_create_project:::::  -- Confirming yes or no   --", possible_project_name)
             if user_message == "yes":
                 project = state["fuzzy_project_suggestion"]
                 state["active_project_id"] = project["id"]
@@ -98,6 +103,7 @@ class UOCManager:
 
     # 2. If user selected from project list
         if state.get("uoc_pending_question"):
+            print("UOC Manager:::::: select_or_create_project:::::  -- Is project ifrom the list    --", possible_project_name)
             selected_id = user_message
             if selected_id in [proj["id"] for proj in user_projects]:
                 state["active_project_id"] = selected_id
@@ -106,11 +112,12 @@ class UOCManager:
 
             if selected_id == "add_new":
                 state["uoc_pending_question"] = False
-                return await self.collect_project_structure_interactively(state)
+                return await self.collect_project_structure_with_priority_sources(state)
 
     # 3. First attempt: try fuzzy match from possible name
         if possible_project_name:
-            match = self.fuzzy_match_project_name(possible_project_name, user_projects)
+            print("UOC Manager:::::: select_or_create_project:::::  --  fuzzy match from possible name    --", possible_project_name)
+            match = fuzzy_match_project_name(possible_project_name, user_projects)
             if match:
                 state["fuzzy_project_suggestion"] = match
                 state["uoc_pending_question"] = True
@@ -136,7 +143,7 @@ class UOCManager:
             return state
 
     # 5. No projects at all → begin onboarding immediately
-        return await self.collect_project_structure_interactively(state)
+        return await self.collect_project_structure_with_priority_sources(state)
 
 
     async def resolve_uoc(self,  state: Dict, uoc_last_called_by: str ) -> Dict:
@@ -150,7 +157,7 @@ class UOCManager:
 
 
         if state.get("uoc_pending_question"):
-            state["UOC Manager:::::: uoc_confidence"] = "low"
+            state["uoc_confidence"] = "low"
             print("UOC Manager:::::: resolve_uoc:::::  <uoc_pending_question Yes> --UOCManager has a question, sending the resonse back to siteops Agent--")
             return state
         active_project_id = state.get("active_project_id")
@@ -164,7 +171,7 @@ class UOCManager:
         state["sender_id"], state["active_project_id"])
 
         if not structure:
-            return await self.collect_project_structure_interactively(state)
+            return await self.collect_project_structure_with_priority_sources(state)
             
         state["project_structure"] = structure
 
@@ -206,6 +213,71 @@ class UOCManager:
             }
 
         return state
+    async def collect_project_structure_with_priority_sources(self, state: Dict) -> Dict:
+        """
+        Modular project structure collector with prioritized input types:
+        - If integrated tool data available (workflow handler): use it.
+        - Else, ask for plan image or PDF.
+        - Else, check for WhatsApp guided flow (future).
+        - Else, fall back to iterative collection.
+        """
+        print("UOC Manager:::::: collect_project_structure_with_priority_sources:::::: -- Modular project structure collection initiated --")
+
+        # 1. Check if external workflow handler has project structure
+        if state.get("workflow_project_structure"):
+            print("UOC Manager:::::: collect_project_structure_with_priority_sources:::::: -- Found project structure from workflow handler --")
+            state["project_structure"] = state["workflow_project_structure"]
+            state["uoc_pending_question"] = False
+            state["uoc_confidence"] = "high"
+            return state
+
+        # 2. Check if user already responded to plan image or document question
+        last_message = state.get("messages", [])[-1].get("content", "").strip().lower() if state.get("messages") else ""
+        question_type = state.get("uoc_question_type")
+
+        if question_type == "has_plan_or_doc":
+            if last_message in ["yes", "i have a plan", "yes i have a plan"]:
+                print("UOC Manager:::::: collect_project_structure_with_priority_sources:::::: -- User has a plan, requesting upload --")
+                state["latest_respons"] = "Please upload the project plan image or PDF."
+                # Future: handle plan image/pdf processing here
+                state["uoc_pending_question"] = True
+                return state
+            elif last_message in ["no", "continue without it"]:
+                print("UOC Manager:::::: collect_project_structure_with_priority_sources:::::: -- User said no to plan, continuing with fallback flow --")
+                # Future: WhatsApp template flow logic could go here
+                return await self.collect_project_structure_interactively(state)
+        possible_messages = [
+"Ah, we’re starting from scratch — no problem at all. I’ll guide you through it. Just to help me do that better: do you have any kind of plan or layout?",
+    "Looks like we haven’t set up a project yet — and that’s totally fine. I’ll help you from here. If you have a drawing or layout, even a rough one, it can make this part a lot easier.",
+    "Hmm, seems like this is a fresh start. Nothing to worry about. I’ll help you get it going — just before that, do you have a plan or image I could refer to?",
+    "Alright — no project linked yet. Happens all the time. I’ll take care of the setup with you. If you happen to have a layout or basic sketch, it’ll help avoid confusion later.",
+    "Okay, I didn’t find a project here yet. All good. Let’s set one up quickly. Do you have anything that shows the layout? Even a photo works — it helps me guide things right.",
+    "Just getting started here? That’s absolutely fine. I’ll help set up the project. To save you time later — do you have a plan, sketch, or drawing handy?",
+    "No project yet — no stress. I’ll walk with you through it. If there’s anything visual — even a rough layout or photo — it’ll help me support you more clearly.",
+    "Alright, I see we haven’t created a project yet. That’s totally okay. I’ll guide the setup — just checking, do you have any drawing or site sketch to begin with?",
+    "Looks like we’re right at the start. That’s great. I’ll help you get things going. Do you happen to have a plan or PDF? It’ll help me set things up more smoothly for you.",
+    "Ah — nothing set up yet, which is perfectly normal. I’ll take care of it. To keep things simple and accurate, do you have any kind of layout I could look at?",
+]
+        # 3. If we haven't asked yet → ask if they have a plan or docume
+        if question_type not in {"has_plan_or_doc", "project_formation"}:
+            print("UOC Manager:::::: collect_project_structure_with_priority_sources:::::: -- Asking user if they have a project plan or document --")
+            state.update({
+            "uoc_pending_question": True,   
+            "uoc_question_type": "has_plan_or_doc",
+            "latest_respons": random.choice(possible_messages),
+            "uoc_next_message_type": "button",
+            "uoc_next_message_extra_data": [
+                {"id": "has_plan", "title": "I have a plan"},
+                {"id": "no_plan", "title": "I don't"}
+            ]
+            })
+            return state
+
+        # 4. Fallback
+        print("UOC Manager:::::: collect_project_structure_with_priority_sources:::::: -- Fallback to iterative collection --")
+        return await self.collect_project_structure_interactively(state)
+
+
     async def collect_project_structure_interactively(self, state: Dict) -> Dict:
         print("UOC Manager:::::: collect_project_structure_interactively:::::: -- Started collecting details--")
     
@@ -214,39 +286,42 @@ class UOCManager:
         project_structure = state.get("project_structure", {})
 
         system_prompt = (
-    "You are an intelligent and conversational assistant guiding a construction professional through setting up a new building project.\n\n"
+  "You are a structured assistant helping a builder fill out their project setup on WhatsApp.\n\n"
 
-    "Your job is to make this process feel as natural as a thoughtful back-and-forth conversation — while accurately collecting structured project details step by step.\n\n"
+    "Your task is to fill in the following fields one-by-one, in strict order:\n"
+    "- project_name (text)\n"
+    "- project_type (choose from: Individual House, Apartment, Gated Community, High Rise)\n"
+    "- number_of_blocks (integer)\n"
+    "- number_of_floors (integer)\n"
+    "- flats_per_floor (integer)\n"
+    "- region_types (list, like: 1BHK, 2BHK, 3BHK, 4BHK, etc)\n\n"
 
-    " Your objective:\n"
-    "Build a JSON object named `uoc` containing all relevant project setup information, collected progressively in the following strict order:\n"
-    "1. project_name (text)\n"
-    "2. project_type (one of: Individual House, Apartment, Gated Community, High Rise)\n"
-    "3. number_of_blocks (integer)\n"
-    "4. number_of_floors (integer)\n"
-    "5. flats_per_floor (integer)\n"
-    "6. region_types (list of types like: 1BHK, 2BHK, 3BHK, 4BHK, 5BHK, garden area, etc.)\n\n"
+    "Behavior rules:\n"
+    "- From the conversation history, extract any already-known fields.\n"
+    "- Only ask for the next missing field, one at a time.\n"
+    "- Be warm, polite, and brief.\n"
+    "- If the latest message is funny, off-topic, emoji-only, or unclear:\n"
+    "     → Gently acknowledge it, then respond with empathy(e.g., with empathy, a smile, or understanding tone),\n"
+    "     → Then re-ask the current pending field in a supportive and friendly way.\n"
+    "- If user repeatedly sends irrelevant messages, remain patient and gently repeat the current field request.\n"
+    "- Be emotionally aware, but stay focused.\n"
+    "- Do not proceed to the next field until the current one is answered.\n"
+    "- Use interaction types wisely:\n"
+    "    'plain' → open-text\n"
+    "    'button' → up to 3 choices\n"
+    "    'list' → more than 3 choices\n\n"
 
-    " How to behave:\n"
-    "- Review the entire message history (`messages`) to extract any already-provided details.\n"
-    "- Ask the user for ONLY the next missing field — don’t jump ahead or ask multiple things.\n"
-    "- Phrase your question clearly and politely, as if you're speaking with a busy site manager. Use a tone that’s smart, helpful, and concise.\n"
-    "- Choose the best interaction type:\n"
-    "    → Use 'plain' for open-text answers (like names or numbers)\n"
-    "    → Use 'button' for simple fixed choices (up to 3 options)\n"
-    "    → Use 'list' if the choices are longer than 3\n\n"
-
-    " Once all fields are collected, mark the conversation as complete by setting `uoc_pending_question` to false.\n"
-    "Until then, always keep it true.\n\n"
-
-    " Output Format — STRICT JSON only, in the exact shape below. Never add explanations, commentary, or markdown:\n"
+    "Output STRICTLY in this JSON structure, and nothing else:\n"
     "{\n"
-    '  "uoc": { ...fields extracted so far... },\n'
-    '  "latest_respons": "The next friendly question to ask the user" | Empty string if the required conditions are met,\n'
+    '  "uoc": { ...fields },\n'
+    '  "latest_respons": "friendly and clear next message",\n'
     '  "next_message_type": "plain" | "button" | "list",\n'
-    '  "next_message_extra_data": [ options list if applicable, else null ],\n'
-    '  "uoc_pending_question": true | false\n'
+    '  "next_message_extra_data": [options if applicable, else null],\n'
+    '  "uoc_pending_question": true | false,\n'
+    '  "uoc_confidence": "low" | "high"\n'
     "}\n"
+
+    "You must not include markdown, explanations, comments, or formatting beyond the JSON above."
 )
 
 
@@ -272,6 +347,8 @@ class UOCManager:
                 state["uoc_confidence"] = "high"
                 state["uoc_question_type"] = None
                 state["latest_respons"] = ""
+                print("UOC Manager:::::: collect_project_structure_interactively:::::: <pending_question No> -- Saving the project to DB --")
+                self.project_db.save_project_for_user(state["sender_id"], state["active_project_id"], project_structure)
                 return state
 
             if "uoc" in parsed and isinstance(parsed["uoc"], dict):
@@ -287,13 +364,7 @@ class UOCManager:
                 state["uoc_next_message_extra_data"] = parsed.get("next_message_extra_data", None)
                 state["uoc_pending_question"] = True
                 state["uoc_question_type"] = "project_formation"
-                if state["uoc_pending_question"]:
-                    state["uoc_confidence"] = "low"
-                    #state["poject_setup_done"] = False
-                else:
-                    state["uoc_confidence"] = "high"
-                    self.project_db.save_project_for_user(state["sender_id"], state["active_project_id"], project_structure)
-                    #state["poject_setup_done"] = True
+
             #state["uoc_confidence"] = "low" if state["uoc_pending_question"] else "high"
         except Exception as e:
             state["uoc_pending_question"] = True

@@ -10,6 +10,8 @@ class AgentState(TypedDict):
     caption: Optional[str]
     agent_first_run: Optional[bool]
     uoc_pending_question: Optional[bool]
+    random_question_type: Optional[str]
+    user_verified: Optional[bool]
     uoc_question_type: Optional[str]
     uoc_last_called_by: Optional[str]
     uoc_confidence: Optional[str]

@@ -1,5 +1,6 @@
 from langgraph.graph import StateGraph
 from agents.procurement_agent import run_procurement_agent
+from agents.random_agent import classify_and_respond
 #from agents.credit_agent import run_credit_agent
 from agents.siteops_agent import run_siteops_agent
 from langchain_openai import ChatOpenAI
@@ -132,6 +133,7 @@ builder_graph.add_node("infer_intent", infer_intent_node)
 builder_graph.add_node("procurement", run_procurement_agent)
 #builder_graph.add_node("credit", run_credit_agent)
 builder_graph.add_node("siteops", run_siteops_agent)
+builder_graph.add_node("random", classify_and_respond)
 builder_graph.add_node("cleanup", cleanup_node)
 
 # Flow setup
@@ -142,7 +144,7 @@ builder_graph.add_conditional_edges(
     path_map={
         "procurement": "procurement",
         #"credit": "credit",
-        #"transport": "siteops",  # fallback
+        "random": "random",  # fallback
         "siteops": "siteops"
     }
 )
@@ -150,5 +152,6 @@ builder_graph.add_conditional_edges(
 
 builder_graph.add_edge("procurement", "cleanup")
 builder_graph.add_edge("siteops", "cleanup")
+#builder_graph.add_edge("random", "cleanup")
 
 builder_graph = builder_graph.compile()

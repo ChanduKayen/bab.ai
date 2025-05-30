@@ -9,11 +9,13 @@ from app.logging_config import logger
 import requests
 import redis
 import asyncio
+import random
 import json
 import agents.siteops_agent as siteops_agent
+from agents.random_agent import classify_and_respond
 from whatsapp.builder_out import whatsapp_output
 WHATSAPP_API_URL = "https://graph.facebook.com/v19.0/651218151406174/messages"
-ACCESS_TOKEN = "EAAIMZBw8BqsgBOzp2wEbgEHYfjZC66ZC7awz0X8MOKdDOlXHZBrHeQLYDrm86BxJoliZBMv6asJbFMtOwGemZAxujYw3Vsqzr1APZCfdc0C9WIeW9pnskZCSkDI95Mw1XGsxtxxZCzodcAzKJp0mpnQmOjAvpKbZC2SlnZBiQMZC9ObDvZB3cZCzZBaZCQLoBb3pMG3iBffmlPzU6ZC9oyBHPZALicbolC4dDVc81QmoMZD"  
+ACCESS_TOKEN = "EAAIMZBw8BqsgBO1ZC041SH8mZAMXRXiLyW1Qm3H5inG1nvCLJF1324vTuSlu7ZBbG7piSZCbSdl3XCCO4PzmU0dkYT7ZCUoKBL0kyKRz5xRaGZBsFjLG0fDSAjg5XfWjhzP2x2udILLeNzyTHONNzs2y7a76zoPGeuVR4ngf4JKLSiKN9VujyYmPXGu5gndaC3UmDPez3AUPN0CN5PKMjtUz6axXcB6kI8ZD"  
 #ACCESS_TOKEN = os.getenv("WHATSAPP_ACCESS_TOKEN")
 
 # implementing a presistnace layer to preseve the chat history tha saves the state of messages for followup questions required by UOC manager 
@@ -88,7 +90,7 @@ logger.info("[STARTUP] webhook.py loaded successfully.")
 logger.info("Now testing the webhook route.")
 
 def download_whatsapp_image(media_id: str) -> str:
-    #Get media URL
+    #Get media URL 
     media_info_url = f"https://graph.facebook.com/v19.0/{media_id}"
     headers = {"Authorization": f"Bearer {ACCESS_TOKEN}"}
     res = requests.get(media_info_url, headers=headers)
@@ -96,7 +98,7 @@ def download_whatsapp_image(media_id: str) -> str:
     if res.status_code != 200:
         print("Webhook :::::: download_whatsapp_image::::: Failed to get media URL:", res.text)
         return None
-    
+
     media_url = res.json().get("url")
     
     #Downloading media content
@@ -240,10 +242,77 @@ async def whatsapp_webhook(request: Request):
                  
         # Agent returned with UOC pending
         #if state.get("uoc_pending_question", False):
+        PROJECT_FORMATION_MESSAGES = [
+    "Okay.",
+    "Sure.",
+    "Alright.",
+    "Got it.",
+    "Noted.",
+    "Understood.",
+    "Right.",
+    "Fine.",
+    "Sounds good.",
+    "All right.",
+    "Noted. Thanks.",
+    "Got you.",
+    "Yes, okay.",
+    "Okay then.",
+    "Clear.",
+    "Yes.",
+    "Okay. Proceeding.",
+]
+
+        PLAN_OR_DOC_MESSAGES = [
+            "📝 Got it! Just checking if we have your site plans or reference docs...",
+            "📂 Looking into the drawings and files you might have shared.",
+            "📄 One sec! Reviewing if we’ve got your plan or design images.",
+        ]
+
+        PROJECT_SELECTION_MESSAGES = [
+            "🔍 Hold on... I’m figuring out which project you’re referring to.",
+            "📁 Let me check if this matches any existing projects.",
+            "🗂️ Matching this conversation to the right project for context.",
+        ]
+
+        FIRST_TIME_MESSAGES = [
+             "Alright, let’s take a look.",
+    "Okay, I’m with you.",
+    "Sure, let's get started.",
+    "Got it. Let’s take the first step.",
+    "Alright. We'll go one thing at a time.",
+    "I’m here. Let’s begin.",
+    "Alright — starting simple.",
+    "Okay, let's figure this out together.",
+    "All good. Let me guide you from here.",
+    "That’s received. Let’s begin from the basics.",
+    "Okay, let’s make this easy.",
+    "Alright. Just need a small detail to begin.",
+    "Let’s start gently. One quick check first.",
+    "Thanks. I’ll take it from here.",
+    "Got it. Let’s just set the context right.",
+    "With you. Let’s start at the beginning.",
+    "Noted. I’ll guide you from here.",
+    "Okay, let’s get some clarity first.",
+    "Right, let’s set the ground.",
+    "Perfect. Let’s walk through it step by step.", 
+        ]
+
+
         if  state.get("uoc_pending_question") is True:  # checking if the uoc manager is pending a question to be answered by the user
             print("Webhook :::::: whatsapp_webhook::::: <uoc_pending_question>::::: -- Figuring out which method in UOC managet to call, after the question initasked by UOC manager --", state["uoc_pending_question"])
+            q_type = state.get("uoc_question_type", "").strip().lower()
+            print("Webhook :::::: whatsapp_webhook::::: <uoc_question_type>::::: -- The set question type is --", repr(q_type))
             uoc_mgr = UOCManager() #Instantiate the class
-            if state["uoc_question_type"] == "project_formation":
+            
+            if q_type == "onboarding":
+                    
+                    print("Webhook :::::: whatsapp_webhook::::: <pending_question True>::::: -- The set question type is random, so calling ??classify_and_respond?? --")
+                    
+                    followups_state =  await classify_and_respond(state)
+            
+            
+            elif q_type == "project_formation":
+                whatsapp_output(sender_id, random.choice(PROJECT_FORMATION_MESSAGES), message_type="plain")
                 print("Webhook :::::: whatsapp_webhook::::: <uoc_pending_question True>::::: <uoc_question_type>::::: -- The set question type is project_formation so calling ??collect_project_structure_interactively??  --", state["uoc_question_type"])
                 #print("State=====", state)
                 try:
@@ -251,14 +320,27 @@ async def whatsapp_webhook(request: Request):
                 except Exception as e:
                     print("Webhook :::::: whatsapp_webhook::::: Error calling collect_project_structure_interactively:", e)
                     import traceback; traceback.print_exc()
+            
+              
           
+            elif q_type == "has_plan_or_doc":
+                whatsapp_output(sender_id, random.choice(PLAN_OR_DOC_MESSAGES), message_type="plain")
+                print("Webhook :::::: whatsapp_webhook::::: <uoc_pending_question True>::::: <uoc_question_type>::::: -- The set question type is has_plan_or_doc, so calling ??collect_plan_or_doc?? --", state["uoc_question_type"])
+                followups_state = await uoc_mgr.collect_project_structure_with_priority_sources(state)
 
-
-            elif state["uoc_question_type"] == "project_selection":
+ 
+            elif q_type == "project_selection":
+                whatsapp_output(sender_id, random.choice(PROJECT_SELECTION_MESSAGES), message_type="plain")
                 print("Webhook ::::::  whatsapp_webhook::::: <uoc_pending_question True>::::: <uoc_question_type>::::: -- The set question type is project_selection, so calling ??select_or_create_project??--", state["uoc_question_type"])
                 followups_state = await uoc_mgr.select_or_create_project(state, None)
+            
+            
+            
             else:
                 raise ValueError(f"Unknown uoc_question_type: {state['uoc_question_type']}")
+            
+        
+                #print("State after classify_and_respond=====", followups_state)
             
             if followups_state.get("uoc_pending_question") is False and followups_state.get("uoc_confidence") in ["high"]:
                 print("Webhook :::::: whatsapp_webhook::::: <uoc_pending_question True>::::: <uoc_pending_question>::::: -- UOC is now confident, calling the agent --")
@@ -287,6 +369,7 @@ async def whatsapp_webhook(request: Request):
              
         elif state.get("uoc_pending_question") is False:
             print("Webhook :::::: whatsapp_webhook::::: <uoc_pending_question False>:::::  -- Calling orchestrator, this is a first time message --")
+            #whatsapp_output(sender_id, random.choice(FIRST_TIME_MESSAGES), message_type="plain")
             result = await builder_graph.ainvoke(state)
             save_state(sender_id, result)
             print("Webhook :::::: whatsapp_webhook::::: <uoc_pending_question False>:::::  -- Got result from the Orchestrator, saved the state : --", get_state(sender_id))
