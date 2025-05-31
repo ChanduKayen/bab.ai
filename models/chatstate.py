@@ -17,6 +17,7 @@ class AgentState(TypedDict):
     uoc_confidence: Optional[str]
     uoc: Optional[dict]
     context: Optional[str]
+    siteops_quick_grasp: Optional[str]
     uoc_next_message_type: Optional[str]
     uoc_next_message_extra_data: Optional[List[dict]]    
     latest_respons: Optional[str]

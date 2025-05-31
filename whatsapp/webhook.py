@@ -15,7 +15,7 @@ import agents.siteops_agent as siteops_agent
 from agents.random_agent import classify_and_respond
 from whatsapp.builder_out import whatsapp_output
 WHATSAPP_API_URL = "https://graph.facebook.com/v19.0/651218151406174/messages"
-ACCESS_TOKEN = "EAAIMZBw8BqsgBO1ZC041SH8mZAMXRXiLyW1Qm3H5inG1nvCLJF1324vTuSlu7ZBbG7piSZCbSdl3XCCO4PzmU0dkYT7ZCUoKBL0kyKRz5xRaGZBsFjLG0fDSAjg5XfWjhzP2x2udILLeNzyTHONNzs2y7a76zoPGeuVR4ngf4JKLSiKN9VujyYmPXGu5gndaC3UmDPez3AUPN0CN5PKMjtUz6axXcB6kI8ZD"  
+ACCESS_TOKEN = "EAAIMZBw8BqsgBOZBowN9NH9NZBLxF08sHjUVXGG8ktZBXxd27gT5tWZAgwePJmIttxJi8dtdLkZBH84qPwa3rQGsIrIPoh5mi0JQzB8OKZAM4FV0vB6adqOYzqCaBI0HUaQKYedS9ysbvNkASY0wf8e7LsI5QKCtwFvGht83PEYGgG8PkAXxMK2dlxEZBsnbippkyZCbpuI7ZBwKmrZBBSaYvQp2g1fpFGd3IG0"  
 #ACCESS_TOKEN = os.getenv("WHATSAPP_ACCESS_TOKEN")
 
 # implementing a presistnace layer to preseve the chat history tha saves the state of messages for followup questions required by UOC manager 
@@ -244,28 +244,25 @@ async def whatsapp_webhook(request: Request):
         #if state.get("uoc_pending_question", False):
         PROJECT_FORMATION_MESSAGES = [
     "Okay.",
-    "Sure.",
     "Alright.",
     "Got it.",
     "Noted.",
     "Understood.",
     "Right.",
     "Fine.",
-    "Sounds good.",
     "All right.",
-    "Noted. Thanks.",
-    "Got you.",
-    "Yes, okay.",
-    "Okay then.",
     "Clear.",
     "Yes.",
-    "Okay. Proceeding.",
 ]
 
         PLAN_OR_DOC_MESSAGES = [
-            "📝 Got it! Just checking if we have your site plans or reference docs...",
-            "📂 Looking into the drawings and files you might have shared.",
-            "📄 One sec! Reviewing if we’ve got your plan or design images.",
+            "No problem. Just answer a few quick questions — we’ll set up your project, and auto-link all future updates.",
+
+"OKay! Let’s start from scratch — fast. A few simple answers now, and everything else will connect automatically.",
+
+"That’s fine. You’ll be done in under a minute — we’ll match future updates to this project for you.",
+
+"Sure, we work with whatever you’ve got. Just a few taps now — Bab.ai will keep everything neatly linked from here on.",
         ]
 
         PROJECT_SELECTION_MESSAGES = [

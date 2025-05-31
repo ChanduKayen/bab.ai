@@ -64,7 +64,36 @@ class UOCManager:
             openai_api_key=openai_api_key or os.getenv("OPENAI_API_KEY")
         )
         self.project_db = ProjectDatabase()
+    def apply_patch(self, tree: Dict, patch: Dict):
+        """
+        Walk / create nodes along patch["path"], then write patch["field"]=value.
+        Supports block:  floor:  flat:  (extend with task: etc.)
+        """
+        node = tree
+        for seg in patch.get("path", []):
+            typ, name = seg.split(":", 1)
 
+            if typ == "block":
+                blocks = {b["block_name"]: b for b in node.setdefault("blocks", [])}
+                node = blocks.setdefault(name, {"block_name": name, "floors": []})
+                if node not in tree["blocks"]:
+                    tree["blocks"].append(node)
+
+            elif typ == "floor":
+                floors = {f["floor_number"]: f for f in node.setdefault("floors", [])}
+                num = int(name)
+                node = floors.setdefault(num, {"floor_number": num, "flats": []})
+
+            elif typ == "flat":
+                flats = {f["flat_label"]: f for f in node.setdefault("flats", [])}
+                node = flats.setdefault(name, {"flat_label": name, "tasks": []})
+
+        # coerce simple digit strings → int
+        val = patch["value"]
+        if isinstance(val, str) and val.isdigit():
+            val = int(val)
+
+        node[patch["field"]] = val
     async def extract_possible_project_name(self, caption_text: str) -> str:
         prompt = "Extract the possible project name or block reference from this text. Return onlly the project name if found, empty string if nothing found. No comments, no explanations, nothing"
         messages = [SystemMessage(content=prompt), HumanMessage(content=caption_text)]
@@ -144,7 +173,6 @@ class UOCManager:
 
     # 5. No projects at all → begin onboarding immediately
         return await self.collect_project_structure_with_priority_sources(state)
-
 
     async def resolve_uoc(self,  state: Dict, uoc_last_called_by: str ) -> Dict:
         print("UOC Manager:::::: resolve_uoc:::::  -- Called UOC Manager")
@@ -247,16 +275,11 @@ class UOCManager:
                 # Future: WhatsApp template flow logic could go here
                 return await self.collect_project_structure_interactively(state)
         possible_messages = [
-"Ah, we’re starting from scratch — no problem at all. I’ll guide you through it. Just to help me do that better: do you have any kind of plan or layout?",
-    "Looks like we haven’t set up a project yet — and that’s totally fine. I’ll help you from here. If you have a drawing or layout, even a rough one, it can make this part a lot easier.",
-    "Hmm, seems like this is a fresh start. Nothing to worry about. I’ll help you get it going — just before that, do you have a plan or image I could refer to?",
-    "Alright — no project linked yet. Happens all the time. I’ll take care of the setup with you. If you happen to have a layout or basic sketch, it’ll help avoid confusion later.",
-    "Okay, I didn’t find a project here yet. All good. Let’s set one up quickly. Do you have anything that shows the layout? Even a photo works — it helps me guide things right.",
-    "Just getting started here? That’s absolutely fine. I’ll help set up the project. To save you time later — do you have a plan, sketch, or drawing handy?",
-    "No project yet — no stress. I’ll walk with you through it. If there’s anything visual — even a rough layout or photo — it’ll help me support you more clearly.",
-    "Alright, I see we haven’t created a project yet. That’s totally okay. I’ll guide the setup — just checking, do you have any drawing or site sketch to begin with?",
-    "Looks like we’re right at the start. That’s great. I’ll help you get things going. Do you happen to have a plan or PDF? It’ll help me set things up more smoothly for you.",
-    "Ah — nothing set up yet, which is perfectly normal. I’ll take care of it. To keep things simple and accurate, do you have any kind of layout I could look at?",
+"""I couldn’t find any ongoing project to link this update to — no worries! Let’s set one up real quick 🚀
+
+This takes less than a minute and makes everything smoother from here — I’ll remember your blocks, floors, plans, and even auto-analyze photos or text going forward. Smarter replies. No repetition. More power to you. 💪
+
+Let’s begin with your site plan 👇"""
 ]
         # 3. If we haven't asked yet → ask if they have a plan or docume
         if question_type not in {"has_plan_or_doc", "project_formation"}:
@@ -279,98 +302,130 @@ class UOCManager:
 
 
     async def collect_project_structure_interactively(self, state: Dict) -> Dict:
-        print("UOC Manager:::::: collect_project_structure_interactively:::::: -- Started collecting details--")
-    
-        """LLM driven progressive project setup conversation."""
+        """
+        One-turn loop:
+          • sends chat_history + current tree to the LLM
+          • receives either uoc_patch or uoc_full JSON
+          • merges it, copies control fields, and returns updated state
+        """
         chat_history = state.get("messages", [])
-        project_structure = state.get("project_structure", {})
+        project_structure = state.setdefault("project_structure", {})
 
+        # ------------------------------------------------------------------
+        #  SYSTEM PROMPT  (patch protocol + rules)
+        # ------------------------------------------------------------------
         system_prompt = (
-  "You are a structured assistant helping a builder fill out their project setup on WhatsApp.\n\n"
+            "You are an emotionally-aware assistant collecting a construction "
+            "project hierarchy over WhatsApp.\n\n"
 
-    "Your task is to fill in the following fields one-by-one, in strict order:\n"
-    "- project_name (text)\n"
-    "- project_type (choose from: Individual House, Apartment, Gated Community, High Rise)\n"
-    "- number_of_blocks (integer)\n"
-    "- number_of_floors (integer)\n"
-    "- flats_per_floor (integer)\n"
-    "- region_types (list, like: 1BHK, 2BHK, 3BHK, 4BHK, etc)\n\n"
+            "================  GOAL  ================\n"
+            "Discover the structure down to the smallest relevant unit, skipping "
+            "levels that don’t exist:\n"
+            "  • project_name → blocks → floors → flats.\n\n"
 
-    "Behavior rules:\n"
-    "- From the conversation history, extract any already-known fields.\n"
-    "- Only ask for the next missing field, one at a time.\n"
-    "- Be warm, polite, and brief.\n"
-    "- If the latest message is funny, off-topic, emoji-only, or unclear:\n"
-    "     → Gently acknowledge it, then respond with empathy(e.g., with empathy, a smile, or understanding tone),\n"
-    "     → Then re-ask the current pending field in a supportive and friendly way.\n"
-    "- If user repeatedly sends irrelevant messages, remain patient and gently repeat the current field request.\n"
-    "- Be emotionally aware, but stay focused.\n"
-    "- Do not proceed to the next field until the current one is answered.\n"
-    "- Use interaction types wisely:\n"
-    "    'plain' → open-text\n"
-    "    'button' → up to 3 choices\n"
-    "    'list' → more than 3 choices\n\n"
+            "==============  STRATEGY  ==============\n"
+            "1. Use chat history to pre-fill known fields.\n"
+            "2. Ask ONLY for the next missing piece — one question at a time.\n"
+            "3. If a level is irrelevant (e.g. single villa) mark it ‘skipped’ and "
+            "jump deeper.\n"
+            "4. After defining a floor layout ask: "
+            "   “Apply the same layout to remaining floors?” (Yes/No buttons ≤20).\n"
+            "5. Capture facing (East / West / North / South) when mentioned.\n"
+            "6. Treat replies like ‘skip / none / later’ as null and continue.\n"
+            "7. If user seems confused show a 1-sentence example + relevant buttons.\n"
+            "8. If user refuses to continue now, end politely with "
+            "\"uoc_pending_question\": false & \"uoc_confidence\": \"low\".\n\n"
 
-    "Output STRICTLY in this JSON structure, and nothing else:\n"
-    "{\n"
-    '  "uoc": { ...fields },\n'
-    '  "latest_respons": "friendly and clear next message",\n'
-    '  "next_message_type": "plain" | "button" | "list",\n'
-    '  "next_message_extra_data": [options if applicable, else null],\n'
-    '  "uoc_pending_question": true | false,\n'
-    '  "uoc_confidence": "low" | "high"\n'
-    "}\n"
+            "===========  OUTPUT FORMAT  ============\n"
+            "Return ONLY raw JSON (no markdown). Use **one** shape:\n\n"
 
-    "You must not include markdown, explanations, comments, or formatting beyond the JSON above."
-)
+            "A) Incremental patch (common)\n"
+            "{\n"
+            "  \"uoc_patch\": {\n"
+            "      \"path\":  [\"block:<name>\", \"floor:<num>\", \"flat:<label>\"]?,\n"
+            "      \"field\": \"<field_name>\",            # e.g. flats_per_floor\n"
+            "      \"value\": <json_value>\n"
+            "  },\n"
+            "  \"latest_respons\": \"<next prompt>\",\n"
+            "  \"next_message_type\": \"plain\" | \"button\" | \"list\",\n"
+            "  \"next_message_extra_data\": [ {\"id\":\"...\",\"title\":\"...\"} ] | null,\n"
+            "  \"uoc_pending_question\": true | false,\n"
+            "  \"uoc_confidence\": \"low\" | \"high\"\n"
+            "}\n\n"
 
+            "B) Full snapshot (rare)\n"
+            "{\n"
+            "  \"uoc_full\": { ...entire project tree... },\n"
+            "  ...same control keys...\n"
+            "}\n\n"
 
+            "Rules:\n"
+            "• Button titles ≤ 20 characters.\n"
+            "• Never repeat a question once the field is non-null.\n"
+            "• After three off-topic replies offer to pause (Yes/No).\n"
+        )
 
+        # ------------------------------------------------------------------
+        #  BUILD MESSAGE LIST
+        # ------------------------------------------------------------------
         messages = [SystemMessage(content=system_prompt)]
-        for msg in chat_history:
-            messages.append(HumanMessage(content=msg["content"]))
+        for m in chat_history:
+            messages.append(HumanMessage(content=m["content"]))
 
         if project_structure:
-            messages.append(HumanMessage(content=f"Current known project structure:\n{json.dumps(project_structure)}"))
+            messages.append(
+                HumanMessage(
+                    content="Current known project structure:\n"
+                            + json.dumps(project_structure)
+                )
+            )
 
-        response = await self.llm.ainvoke(messages)
-        result = response.content.strip().replace("```json", "").replace("```", "")
-        
+        # ------------------------------------------------------------------
+        #  CALL LLM
+        # ------------------------------------------------------------------
+        llm_raw = await self.llm.ainvoke(messages)
+        llm_clean = clean_llm_response(llm_raw.content)
+
+        # ------------------------------------------------------------------
+        #  PARSE & MERGE
+        # ------------------------------------------------------------------
         try:
-            parsed = json.loads(result)
-            print("UOC Manager:::::: collect_project_structure_interactively::::::  -- Parsed respnose from LLM is :", parsed["latest_respons"])
-            
-            pending_question = parsed["uoc_pending_question"]
-            if not pending_question:
-                print("UOC Manager:::::: collect_project_structure_interactively:::::: <pending_question No> -- UOC is confident, Returning state to calling function  --")
-                state["uoc_pending_question"] = False
-                state["uoc_confidence"] = "high"
-                state["uoc_question_type"] = None
-                state["latest_respons"] = ""
-                print("UOC Manager:::::: collect_project_structure_interactively:::::: <pending_question No> -- Saving the project to DB --")
-                self.project_db.save_project_for_user(state["sender_id"], state["active_project_id"], project_structure)
-                return state
-
-            if "uoc" in parsed and isinstance(parsed["uoc"], dict):
-                print("UOC Manager:::::: collect_project_structure_interactively:::::: <uoc  found in prased> -- Setting project structure  --")
-                project_structure.update(parsed["uoc"])
-                state["project_structure"] = project_structure
-                
-            
-            if "latest_respons" in parsed:
-                #state["messages"].append({"role": "assistant", "content": parsed["latest_respons"]})
-                state["latest_respons"] = parsed["latest_respons"]
-                state["uoc_next_message_type"] = parsed.get("next_message_type", "plain")
-                state["uoc_next_message_extra_data"] = parsed.get("next_message_extra_data", None)
-                state["uoc_pending_question"] = True
-                state["uoc_question_type"] = "project_formation"
-
-            #state["uoc_confidence"] = "low" if state["uoc_pending_question"] else "high"
-        except Exception as e:
+            parsed = json.loads(llm_clean)
+        except Exception:
             state["uoc_pending_question"] = True
             state["uoc_confidence"] = "low"
-            state["messages"].append({"role": "assistant", "content": "I'm unable to parse that. Could you please provide the project details again?"})
-        print("UOC Manager:::::: Collect_project_structure_interactively::::::  -- Final State in this method --", state)
+            state["latest_respons"] = (
+                "Sorry, I couldn’t read that. Could you please re-phrase?"
+            )
+            return state
+
+        if "uoc_patch" in parsed:
+            self.apply_patch(project_structure, parsed["uoc_patch"])
+
+        elif "uoc_full" in parsed:
+            state["project_structure"] = parsed["uoc_full"]
+            project_structure = state["project_structure"]
+
+        # ------------------------------------------------------------------
+        #  COPY CONTROL FIELDS
+        # ------------------------------------------------------------------
+        state["latest_respons"] = parsed["latest_respons"]
+        state["uoc_next_message_type"] = parsed.get("next_message_type", "plain")
+        state["uoc_next_message_extra_data"] = parsed.get("next_message_extra_data")
+        state["uoc_pending_question"] = parsed["uoc_pending_question"]
+        state["uoc_confidence"] = parsed["uoc_confidence"]
+        state["uoc_question_type"] = "project_formation"
+
+        # ------------------------------------------------------------------
+        #  FINALISE IF DONE
+        # ------------------------------------------------------------------
+        if not state["uoc_pending_question"]:
+            self.project_db.save_project_for_user(
+                state["sender_id"],
+                state["active_project_id"],
+                project_structure
+            )
+
         return state
   
     async def extract_candidate_fields(self, message: str, project_structure: Dict) -> Optional[Dict]:
