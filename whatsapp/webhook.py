@@ -8,20 +8,21 @@ router = APIRouter()
 from app.logging_config import logger
 import requests
 import redis
-import asyncio
+import asyncio  
 import random
 import json
 import agents.siteops_agent as siteops_agent
 from agents.random_agent import classify_and_respond
 from whatsapp.builder_out import whatsapp_output
+from users.user_onboarding_manager import user_status
 WHATSAPP_API_URL = "https://graph.facebook.com/v19.0/651218151406174/messages"
-ACCESS_TOKEN = "EAAIMZBw8BqsgBOZBowN9NH9NZBLxF08sHjUVXGG8ktZBXxd27gT5tWZAgwePJmIttxJi8dtdLkZBH84qPwa3rQGsIrIPoh5mi0JQzB8OKZAM4FV0vB6adqOYzqCaBI0HUaQKYedS9ysbvNkASY0wf8e7LsI5QKCtwFvGht83PEYGgG8PkAXxMK2dlxEZBsnbippkyZCbpuI7ZBwKmrZBBSaYvQp2g1fpFGd3IG0"  
+ACCESS_TOKEN = "EAAIMZBw8BqsgBOZCkZCZAxWF6DHGyjqeGVI1AwibRNlZAeZClzCYfASgHGVWfKCC6tJYe4LnRSkG1evJzceerYjFTZAv9RxWP1PbZANsluZA9wBiCbrBKmqf0ZAaEw07JLVxtN4TqPbeAP9yBKc5J1J2492XkjsfPI5QcopnHUmIcAdl8HyJiPpJlIXxYrFoir2A5l4ViM07aHQ92gsvlQFcIlxrKZCDmFoTMYZD"  
 #ACCESS_TOKEN = os.getenv("WHATSAPP_ACCESS_TOKEN")
 
 # implementing a presistnace layer to preseve the chat history tha saves the state of messages for followup questions required by UOC manager 
 #r = redis.Redis(host='localhost', port=6379, decode_responses=True)
 memory_store = {}
-
+ 
 
 def get_state(sender_id: str):
     print("Webhook :::::: get_state::::: Getting state for sender_id:", sender_id)
@@ -67,9 +68,6 @@ def save_state(sender_id:str, state:dict):
     print("Webhook :::::: save_state::::: State saved method called")
     # r.set(sender_id, json.dumps(state), ex=3600)  # Setting the expiration time to 1 hour
 
-#########################################################
-
-
 # def send_whatsapp_message(to_number: str, message_text: str):
 #     print("Sending message to WhatsApp:", to_number, message_text)
 #     headers = {
@@ -93,6 +91,7 @@ def download_whatsapp_image(media_id: str) -> str:
     #Get media URL 
     media_info_url = f"https://graph.facebook.com/v19.0/{media_id}"
     headers = {"Authorization": f"Bearer {ACCESS_TOKEN}"}
+    print("Webhook :::::: download_whatsapp_image::::: Failed to get media URL:",media_id)
     res = requests.get(media_info_url, headers=headers)
     
     if res.status_code != 200:
@@ -159,19 +158,23 @@ async def whatsapp_webhook(request: Request):
             return {"status": "ignored", "reason": "No messages found"}
         msg = entry["messages"][0]
 
-
+        
         print("Webhook :::::: whatsapp_webhook::::: Received message:", msg)
         sender_id = msg["from"]
         msg_type = msg["type"]
-
-        # state = {
-        #     "sender_id": sender_id,
-        #     "messages": [],  # We'll fill this based on type
-        #     #"uoc_last_called_by": None,  # Without declaring this variable here, it will be undefined in the first call to UOCManager
-        #     #"uoc_pending_question": False,
-        # }
+        contacts = entry.get("contacts", [])
+        user_name = None
+        
+        if contacts and isinstance(contacts[0], dict):
+            profile = contacts[0].get("profile", {})
+            if isinstance(profile, dict):
+                user_name = profile.get("name")
+        print("Webhook :::::: whatsapp_webhook::::: usrname:", user_name)
+      
         state = get_state(sender_id)  # Retrieve the state from Redis
-
+        #state["user_full_name"] = user_name  
+        user = user_status(sender_id, user_name)
+        user_stage = user["user_stage"]
 
         if state is None:
             state = {
@@ -181,8 +184,13 @@ async def whatsapp_webhook(request: Request):
                 "uoc_pending_question": False,
                 "uoc_last_called_by": None,
                 "uoc_confidence": "low",
-                "uoc": {},                           
+                "uoc": {}, 
+                "user_full_name": user_name,    
+                "user_stage": user_stage,    
             }
+        else:
+            state["user_full_name"] = user_name
+            state["user_stage"] = user_stage  
         if msg_type == "text":
             text = msg["text"]["body"]
             state["messages"].append({"role": "user", "content": text})
@@ -192,7 +200,7 @@ async def whatsapp_webhook(request: Request):
             caption = msg["image"].get("caption", "")
 
             image_path = download_whatsapp_image(media_id)
-
+            print("Webhook :::::: whatsapp_webhook::::: Image downloaded, path:", image_path)
             state["messages"].append({
                 "role": "user",
                 "content": f"[Image ID: {media_id}] {caption}"  # Or you could pass separately
@@ -367,6 +375,7 @@ async def whatsapp_webhook(request: Request):
         elif state.get("uoc_pending_question") is False:
             print("Webhook :::::: whatsapp_webhook::::: <uoc_pending_question False>:::::  -- Calling orchestrator, this is a first time message --")
             #whatsapp_output(sender_id, random.choice(FIRST_TIME_MESSAGES), message_type="plain")
+            state["user_full_name"] = user_name  # Update the user's full name in the state
             result = await builder_graph.ainvoke(state)
             save_state(sender_id, result)
             print("Webhook :::::: whatsapp_webhook::::: <uoc_pending_question False>:::::  -- Got result from the Orchestrator, saved the state : --", get_state(sender_id))
@@ -382,7 +391,7 @@ async def whatsapp_webhook(request: Request):
         logger.info("Final response sent to WhatsApp")
         return {"status": "done", "reply": response_msg}
     
-    
+       
     except Exception as e:
         logger.error("Error in WhatsApp webhook:{e}")
         #logger.error(e, exc_info=True)

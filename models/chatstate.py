@@ -2,6 +2,9 @@ from typing import TypedDict, List, Optional
 
 
 class AgentState(TypedDict):
+    user_full_name: Optional[str]
+    user_stage: Optional[str]
+    insights: Optional[List[dict]]
     messages: List[dict]
     sender_id: str
     intent: Optional[str]
@@ -17,7 +20,6 @@ class AgentState(TypedDict):
     uoc_confidence: Optional[str]
     uoc: Optional[dict]
     context: Optional[str]
-    siteops_quick_grasp: Optional[str]
     uoc_next_message_type: Optional[str]
     uoc_next_message_extra_data: Optional[List[dict]]    
     latest_respons: Optional[str]

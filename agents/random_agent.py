@@ -54,8 +54,8 @@ ROUTER_PROMPT = """You are Bab.ai’s WhatsApp concierge.
 OUTPUT
 Return ONE single-line JSON object and nothing else:
 {
- "intent":  "<siteops | procurement | credit | random>",
- "message": "<friendly 1-sentence reply>",
+ "internal_msg_intent":  "<siteops | procurement | credit | random>",
+ "message": "<friendly 1-sentence reply, with more human touch>",
  "cta":     { "id": "<kebab-case>", "title": "<≤20 chars>" }
 }
 
@@ -67,33 +67,66 @@ GUIDE
 
 RULES
 1. Warm, concise, professional. One emoji max.
-2. If intent=random: play along, then *subtly advertise ONE Bab.ai feature*:
+2. If internal_msg_intent = random: respond playfully or empathetically to match the user's tone — then gracefully transition into showcasing one Bab.ai feature in a way that feels natural and almost magical.
+
+The feature should feel like a perfectly timed suggestion, as if it emerged directly from the user’s own context or curiosity. The value should be so well integrated that its importance feels self-evident — requiring no hard sell, just a soft nudge that resonates.
    ─ siteops      → cta.id "siteops",     cta.title "🏗️ Manage My Site"
    ─ procurement  → cta.id "procurement", cta.title "⚡Quick Quotes"
    ─ credit       → cta.id "credit",      cta.title "💳 Pay-Later Credit"
 3. “message” ≤ 120 characters.
 4. Return ONLY the JSON. No markdown, no extra text.
+5. Preferably respond in local lanuage. I fuser uses ENglish proceed with whaterver language user is using.
 
 EXAMPLE
 User: “Bro, what’s Bab.ai?"
 →
-{"intent":"random","message":"👋 I’m Bab.ai — track site progress, get quotes, even credit when you need.","cta":{"id":"siteops","title":"🏗️ Manage My Site"}}
+{"internal_msg_intent":"random","message":"👋 I’m Bab.ai — track site progress, get quotes, even credit when you need.","cta":{"id":"siteops","title":"🏗️ Manage My Site"}}
 """
 
 # ------------------------------------------------------------------
 # Placeholder downstream handlers (async)
-# ------------------------------------------------------------------
-async def handle_siteops(state: AgentState) -> AgentState:
+# ------------------------------------------------------------------Flatest
+async def handle_siteops(state: AgentState, latest_response: str, uoc_next_message_extra_data=None ) -> AgentState:
     state["agent_first_run"] = True
+    state["messages"][-1]["content"] =""
+    state.update(
+        intent="siteops",
+        latest_respons=latest_response, 
+        uoc_next_message_type="button",
+        uoc_question_type="onboarding",
+        uoc_pending_question=True,  
+        uoc_next_message_extra_data=[uoc_next_message_extra_data],
+        agent_first_run=True
+    )
+    print("Random Agent::::: handle_siteops:::::  --Handling siteops intent --", state)
     from agents.siteops_agent import run_siteops_agent
     return await run_siteops_agent(state)
 
-async def handle_procurement(state: AgentState) -> AgentState:
-    state.update(latest_respons="Let’s get you today’s quotes from vendors.")
+async def handle_procurement(state: AgentState, latest_response: str, uoc_next_message_extra_data=None) -> AgentState:
+   
+    state.update(
+        intent="procurement",
+        latest_respons=latest_response,
+        uoc_next_message_type="button",
+        uoc_question_type="onboarding",
+        uoc_pending_question=True,  
+        uoc_next_message_extra_data=[uoc_next_message_extra_data],
+    )
+    print("Random Agent::::: handle_procurement:::::  --Handling procurement intent --", state)
     return state
 
-async def handle_credit(state: AgentState) -> AgentState:
-    state.update(latest_respons="Let’s see if you’re eligible for credit.")
+async def handle_credit(state: AgentState, latest_response: str, uoc_next_message_extra_data=None) -> AgentState:
+    #state.update(latest_respons="Let’s see if you’re eligible for credit.")
+
+    state.update(
+        intent="credit",
+        latest_respons=latest_response,
+        uoc_next_message_type="button",
+        uoc_question_type="onboarding",
+        uoc_pending_question=True,  
+        uoc_next_message_extra_data=[uoc_next_message_extra_data],
+    )
+    print("Random Agent::::: handle_credit:::::  --Handling credit intent --", state)
     return state
 
 _HANDLER_MAP = {
@@ -102,64 +135,123 @@ _HANDLER_MAP = {
     "credit": handle_credit,
 }
 
-# ------------------------------------------------------------------
-# Main router
-# ------------------------------------------------------------------
+DEFAULT_CTA = {
+    "siteops":     {"id": "siteops",     "title": "🏗️ Manage My Site"},
+    "procurement": {"id": "procurement", "title": "⚡ Get Quick Quotes"},
+    "credit":      {"id": "credit",      "title": "💳 Get Credit Now"},
+}
+
+
+#----------------------------User onboarding prompts-----------------------------
+NEW_USER_PROMPT = """
+You are Bab.ai — a world-class, emotionally intelligent assistant for construction professionals on WhatsApp.
+
+The user has just joined (or returned). Your job is to make them feel welcomed, seen, and curious.
+
+Write a short 2–3 line message that does the following:
+
+1. Greet them by name using culturally appropriate honorifics:
+   - Use "garu" after the name if the user’s language is Telugu
+   - Use "ji" after the name if the user’s language is Hindi
+   - Like wise for other languages, e.g. "sahib" in Urdu, etc.
+2. Briefly introduce what Bab.ai can do, in a warm, trustworthy tone:
+   - Track site progress from photos 📸
+   - Get quotes for cement, steel, etc. from trusted vendors 🧱
+   - Unlock pay-later material credit instantly 💳
+3. End with a helpful and upbeat invitation to start — don’t sound robotic.
+
+Tone: magical, confident, and regionally personalized.  Respond in the user’s telugu language.
+Use natural phrasing in the user's language. Keep it concise (max 3 lines).  
+Output ONLY the message — no buttons, no metadata.
+"""
+
+IDENTIFIED_USER_PROMPT = """  """
+ENGAGED_USER_PROMPT = """  """
+TRUSTED_USER_PROMPT = """  """
+
+#----------------------------------------------------------
+
+
+
+def generate_new_user_greeting(user_name: str) -> str:
+    system = SystemMessage(content=NEW_USER_PROMPT)
+    user = HumanMessage(content=f"The user's name is {user_name}.")
+    result = llm.invoke([system, user])
+    return result.content
+
+def generate_identified_user_greeting(user_name: str) -> str:
+    system = SystemMessage(content=IDENTIFIED_USER_PROMPT)
+    user = HumanMessage(content=f"The user's name is {user_name}.")
+    result = llm.invoke([system, user])
+    return result.content
+def generate_engaged_user_greeting(user_name: str) -> str:
+    system = SystemMessage(content=ENGAGED_USER_PROMPT)
+    user = HumanMessage(content=f"The user's name is {user_name}.")
+    result = llm.invoke([system, user])
+    return result.content
+def generate_trusted_user_greeting(user_name: str) -> str:
+    system = SystemMessage(content=TRUSTED_USER_PROMPT)
+    user = HumanMessage(content=f"The user's name is {user_name}.")
+    result = llm.invoke([system, user])
+    return result.content
+
+
 async def classify_and_respond(state: AgentState) -> AgentState:
     last_msg   = (state["messages"][-1]["content"] or "").strip()
     last_lower = last_msg.lower()
+    uoc_next_message_extra_data = state.get("uoc_next_message_extra_data", [])
+    latest_response = state.get("latest_respons", None)
+
 
     # ---------- 0 · Button click (id) ---------------------------
     if last_lower in _HANDLER_MAP:
-        return await _HANDLER_MAP[last_lower](state)
-
+        return await _HANDLER_MAP[last_lower](state,  latest_response, uoc_next_message_extra_data)
+    
+    user_stage = state.get("user_stage", "new")
+    print("Random Agent::::: classify_and_respond:::::  --user Stage --",user_stage)
     # ---------- 1 · First-time greeting ------------------------
     if state.get("agent_first_run", True):
-        sender_id = state["sender_id"]
-        whatsapp_output(
-            sender_id,
-            "👋 Hi, I’m *Bab.ai* — your smart, pocket-sized assistant for building projects.\n\nI help you track site progress, get material quotes, and even buy now–pay later — all from this chat.",
-            message_type="plain"
-        )
 
-        # 1️⃣ Site Management
-        whatsapp_output(
-            sender_id,
-            "📸 Got a photo or update from your site?\nI’ll instantly tell you what’s happening, flag risks, and help you track progress like a pro.",
-            message_type="button",
-            extra_data=[{"id": "siteops", "title": "🏗️ Manage My Site"}]
-        )
+        if user_stage == "new":
+            username = state.get("user_full_name", "there")
+            print("Random Agent::::: classify_and_respond:::::  --First time user --", state.get("user_full_name"))
+            sender_id = state["sender_id"]
+            greeting_message = generate_new_user_greeting(username)
+            state["latest_respons"] = greeting_message
+            state["uoc_next_message_type"] = "button"
+            state["uoc_question_type"] = "onboarding"
+            state["uoc_pending_question"] = True
+            state["agent_first_run"] = False
+            state["user_verified"] = True
+            state["uoc_next_message_extra_data"] = [
+                {"id": "siteops", "title": "🏗️ Manage My Site"},
+                {"id": "procurement", "title": "⚡ Get Quotes"},
+                {"id": "credit", "title": "💳 Credit Options"}
+            ]
 
-        # 2️⃣ Get Quotes from Vendors
-        whatsapp_output(
-            sender_id,
-            "📦 Need prices for cement, steel, or any building material?\nI’ll send your requirement to verified vendors and get quotes in minutes.",
-            message_type="button",
-            extra_data=[{"id": "procurement", "title": "⚡ Get Quick Quotes"}]
-        )
+            
+            return state
+        elif user_stage == "curious":
+            state["user_stage"] = "identified"
+        elif user_stage == "identified":
+            state["user_stage"] = "engaged"
+        elif user_stage == "engaged":
+            state["user_stage"] = "trusted"
+        else:
+            state["user_stage"] = "new"
+        
 
-        # 3️⃣ Pay-Later Credit
-        whatsapp_output(
-            sender_id,
-            "💳 Want to buy materials without paying upfront?\nI’ll check your eligibility and offer instant pay-later credit — like a virtual credit card for construction.",
-            message_type="button",
-            extra_data=[{"id": "credit", "title": "💳 Get Credit Now"}]
-        )
+        
 
-        # Update state only after sending all messages
-        state.update(
-            agent_first_run=False,
-            user_verified=True,
-            uoc_pending_question=False
-        )
 
+       
     # ---------- 2 · Empty / emoji-only nudge -------------------
     if not re.search(r"\w", last_msg):
         state.update(
-            latest_respons="🙂 Need an update, quote or credit? Choose below!",
+            latest_respons="🙂 Need Site updates, quotations or credit? Try Bab.ai!",
             uoc_next_message_type="button",
             uoc_next_message_extra_data=[
-                {"id": "siteops", "title": "🏗 SiteOps"},
+                {"id": "siteops", "title": "🏗 Manage my site"},
             ],
         )
         return state
@@ -173,24 +265,35 @@ async def classify_and_respond(state: AgentState) -> AgentState:
         log.error("Router LLM failure: %s", e)
         data = {}
 
-    intent   = data.get("intent", "random")
+    internal_msg_intent   = data.get("internal_msg_intent", "random")
     message  = data.get("message") or "Got it!"
-    cta      = data.get("cta") or {"id": "siteops", "title": "🏗 SiteOps"}
-    cta["title"] = cta["title"][:20]        # hard limit
-
+    print("Router::::::- Classify_and_respond:::::  --Intent found: --", internal_msg_intent)
+    if internal_msg_intent in {"siteops", "procurement", "credit"}:
+        raw_cta = data.get("cta", {})
+        title = raw_cta.get("title", DEFAULT_CTA[internal_msg_intent]["title"])[:20]
+        
+        cta = {"id": internal_msg_intent, "title": title}
+        print("Router:- Preparing for cta button-:", cta)
+    else:
+        if internal_msg_intent not in {"siteops", "procurement", "credit", "random"}:
+            internal_msg_intent = "random"
+        cta = DEFAULT_CTA.get(internal_msg_intent, DEFAULT_CTA["siteops"])
+    print("Random Agnet:::: Classify_and_respond:::::  --FIna CTA --", cta)
     # ---------- 4 · Route if needed ---------------------------
-    if intent in _HANDLER_MAP:
-        # send the reply first, then hand off
+    if internal_msg_intent in _HANDLER_MAP:
         state["messages"].append({"role": "assistant", "content": message})
-        return await _HANDLER_MAP[intent](state)
-
-    # ---------- 5 · Random / fallback -------------------------
+        return await _HANDLER_MAP[internal_msg_intent](state,  message, cta)
+    print("Random Agnet:::: Classify_and_respond:::::  --FIna CTA  at last--", cta)
+    print("Router::::::- Classify_and_respond:::::  --Intent found at last --", internal_msg_intent)
+     
+    
+    
     state.update(
-        intent="random",
+        intent=internal_msg_intent,
         latest_respons=message,
         uoc_next_message_type="button",
         uoc_question_type="onboarding",
-        uoc_pending_question=True,
+        uoc_pending_question=True,  
         uoc_next_message_extra_data=[cta],
     )
-    return state
+    return state  
