@@ -28,4 +28,4 @@ class AgentState(TypedDict):
     fuzzy_project_suggestion:Optional[dict]
     #poject_setup_done:Optional[bool]
     active_project_id: Optional[str]         
-    
+    siteops_conversation_log: Optional[List[dict]]

@@ -16,7 +16,7 @@ from agents.random_agent import classify_and_respond
 from whatsapp.builder_out import whatsapp_output
 from users.user_onboarding_manager import user_status
 WHATSAPP_API_URL = "https://graph.facebook.com/v19.0/651218151406174/messages"
-ACCESS_TOKEN = "EAAIMZBw8BqsgBOZCkZCZAxWF6DHGyjqeGVI1AwibRNlZAeZClzCYfASgHGVWfKCC6tJYe4LnRSkG1evJzceerYjFTZAv9RxWP1PbZANsluZA9wBiCbrBKmqf0ZAaEw07JLVxtN4TqPbeAP9yBKc5J1J2492XkjsfPI5QcopnHUmIcAdl8HyJiPpJlIXxYrFoir2A5l4ViM07aHQ92gsvlQFcIlxrKZCDmFoTMYZD"  
+ACCESS_TOKEN = "EAAIMZBw8BqsgBOZBZCg0rECIikE16gfEEy7ee8aTD1PdZBhIEAmNtAIUxcTy7AKpfPCfsKjZCTuHFIKycFIrxiBpnz0NhbZCHzgzAEW3XM16dmSJz78hJzDr5ncrta4vexKCxXwEUIpzfebMiZBKWm9VHZB1XoYxTxeTpZCsMUooegw2aZC7iJItPw7BwoxtvBoImZCmtvO4AUJdfgbkCuWsIXl2GeqVh2TOZCAZD"  
 #ACCESS_TOKEN = os.getenv("WHATSAPP_ACCESS_TOKEN")
 
 # implementing a presistnace layer to preseve the chat history tha saves the state of messages for followup questions required by UOC manager 
@@ -24,7 +24,7 @@ ACCESS_TOKEN = "EAAIMZBw8BqsgBOZCkZCZAxWF6DHGyjqeGVI1AwibRNlZAeZClzCYfASgHGVWfKC
 memory_store = {}
  
 
-def get_state(sender_id: str):
+def get_state(sender_id: str): 
     print("Webhook :::::: get_state::::: Getting state for sender_id:", sender_id)
     return memory_store.get(sender_id)                      
     
@@ -41,7 +41,7 @@ def get_state(sender_id: str):
     #         "messages": [],
     #         "agent_first_run": True,             
     #         "uoc_pending_question": False,
-    #         "uoc_last_called_by": None,
+    #         "uoc_last_called_by": None, 
     #         "uoc_confidence": "low",
     #         "uoc": {},                           
     #     }
@@ -339,7 +339,13 @@ async def whatsapp_webhook(request: Request):
                 print("Webhook ::::::  whatsapp_webhook::::: <uoc_pending_question True>::::: <uoc_question_type>::::: -- The set question type is project_selection, so calling ??select_or_create_project??--", state["uoc_question_type"])
                 followups_state = await uoc_mgr.select_or_create_project(state, None)
             
-            
+            elif q_type == "siteops_welcome":
+                print("Webhook :::::: whatsapp_webhook::::: <uoc_pending_question True>::::: <uoc_question_type>::::: -- The set question type is siteops_welcome, so calling ??siteops_agent.new_user_flow?? --", state["uoc_question_type"])
+                try:
+                    followups_state =  siteops_agent.new_user_flow(state)
+                except Exception as e:
+                    print("Webhook :::::: whatsapp_webhook::::: Error calling siteops_agent.new_user_flow:", e)
+                    import traceback; traceback.print_exc()
             
             else:
                 raise ValueError(f"Unknown uoc_question_type: {state['uoc_question_type']}")
