@@ -1,8 +1,12 @@
+import os
 import requests
+from dotenv import load_dotenv
 
-WHATSAPP_API_URL = "https://graph.facebook.com/v19.0/651218151406174/messages"
-ACCESS_TOKEN = "EAAIMZBw8BqsgBOZBZCg0rECIikE16gfEEy7ee8aTD1PdZBhIEAmNtAIUxcTy7AKpfPCfsKjZCTuHFIKycFIrxiBpnz0NhbZCHzgzAEW3XM16dmSJz78hJzDr5ncrta4vexKCxXwEUIpzfebMiZBKWm9VHZB1XoYxTxeTpZCsMUooegw2aZC7iJItPw7BwoxtvBoImZCmtvO4AUJdfgbkCuWsIXl2GeqVh2TOZCAZD   "  
+load_dotenv(override=True)
+WHATSAPP_API_URL = "https://graph.facebook.com/v19.0/712076848650669/messages"
+#ACCESS_TOKEN = "EAAIMZBw8BqsgBO4ZAdqhSNYjSuupWb2dw5btXJ6zyLUGwOUE5s5okrJnL4o4m89b14KQyZCjZBZAN3yZBCRanqLC82m59bGe4Rd2BPfRe3A3pvGFZCTf2xB7a6insIzesPDVMLIw4gwlMkkz7NGl3ZBLvP5MU8i3mZBMmUBShGeQkSlAyRhsXJtlsg8uGaAfYwTid8PZAGBKnbOR3LFpCgBD8ZCIMJh9xI0sHWy"  
 
+ACCESS_TOKEN = os.getenv("WHATSAPP_ACCESS_TOKEN")
 
 def whatsapp_output(to_number: str, message_text: str, message_type="plain", extra_data=None):
     if message_type == "plain": 
@@ -11,6 +15,7 @@ def whatsapp_output(to_number: str, message_text: str, message_type="plain", ext
         send_button_message(to_number, message_text, extra_data)
     elif message_type == "list":
         send_list_message(to_number, message_text, extra_data)
+
     else:
         raise ValueError(f"Unknown message_type: {message_type}")
 
@@ -22,7 +27,7 @@ def send_plain_message(to_number, message_text):
         "type": "text",
         "text": {"body": message_text}
     }
-    _post_message(headers, payload)
+    _post_message(headers, payload) 
 
 def send_button_message(to_number, message_text, buttons):
     headers = _get_headers()
@@ -45,7 +50,7 @@ def send_list_message(to_number, message_text, sections):
     if isinstance(sections, list) and sections and isinstance(sections[0], str):
         sections = [{
             "title": "Options",
-            "rows": [
+            "rows": [ 
                 {"id": opt.lower().replace(" ", "_"), "title": opt}
                 for opt in sections
             ]
@@ -71,7 +76,7 @@ def send_list_message(to_number, message_text, sections):
 def _get_headers():
     return {
         "Authorization": f"Bearer {ACCESS_TOKEN}",
-        "Content-Type": "application/json"
+        "Content-Type": "application/json" 
     }
 
 def _post_message(headers, payload):
@@ -79,3 +84,4 @@ def _post_message(headers, payload):
     print(f"WhatsApp API response: {response.status_code} {response.text}")
     if response.status_code != 200:
         raise Exception(f"Failed to send message: {response.status_code} {response.text}")
+

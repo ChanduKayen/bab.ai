@@ -9,10 +9,11 @@ class AgentState(TypedDict):
     sender_id: str
     intent: Optional[str]
     image_path: Optional[str]
+    msg_type: Optional[str]
     media_id: Optional[str]
     caption: Optional[str]
     agent_first_run: Optional[bool]
-    uoc_pending_question: Optional[bool]
+    needs_clarification: Optional[bool]
     random_question_type: Optional[str]
     user_verified: Optional[bool]
     uoc_question_type: Optional[str]

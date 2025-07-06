@@ -18,7 +18,7 @@ from langchain_openai import ChatOpenAI
 from langchain_core.messages import SystemMessage, HumanMessage
 from models.chatstate import AgentState
 from whatsapp.builder_out import whatsapp_output
-
+from agents.procurement_agent import run_procurement_agent
 load_dotenv()
 log = logging.getLogger("bab.random_router")
 
@@ -82,65 +82,7 @@ User: “Bro, what’s Bab.ai?"
 →
 {"internal_msg_intent":"random","message":"👋 I’m Bab.ai — track site progress, get quotes, even credit when you need.","cta":{"id":"siteops","title":"🏗️ Manage My Site"}}
 """
-
-# ------------------------------------------------------------------
-# Placeholder downstream handlers (async)
-# ------------------------------------------------------------------Flatest
-async def handle_siteops(state: AgentState, latest_response: str, uoc_next_message_extra_data=None ) -> AgentState:
-    state["agent_first_run"] = True
-    state["messages"][-1]["content"] =""
-    state.update(
-        intent="siteops",
-        latest_respons=latest_response, 
-        uoc_next_message_type="button",
-        uoc_question_type="onboarding",
-        uoc_pending_question=True,  
-        uoc_next_message_extra_data=[uoc_next_message_extra_data],
-        agent_first_run=True
-    )
-    print("Random Agent::::: handle_siteops:::::  --Handling siteops intent --", state)
-    from agents.siteops_agent import run_siteops_agent
-    return await run_siteops_agent(state)
-
-async def handle_procurement(state: AgentState, latest_response: str, uoc_next_message_extra_data=None) -> AgentState:
-   
-    state.update(
-        intent="procurement",
-        latest_respons=latest_response,
-        uoc_next_message_type="button",
-        uoc_question_type="onboarding",
-        uoc_pending_question=True,  
-        uoc_next_message_extra_data=[uoc_next_message_extra_data],
-    )
-    print("Random Agent::::: handle_procurement:::::  --Handling procurement intent --", state)
-    return state
-
-async def handle_credit(state: AgentState, latest_response: str, uoc_next_message_extra_data=None) -> AgentState:
-    #state.update(latest_respons="Let’s see if you’re eligible for credit.")
-
-    state.update(
-        intent="credit",
-        latest_respons=latest_response,
-        uoc_next_message_type="button",
-        uoc_question_type="onboarding",
-        uoc_pending_question=True,  
-        uoc_next_message_extra_data=[uoc_next_message_extra_data],
-    )
-    print("Random Agent::::: handle_credit:::::  --Handling credit intent --", state)
-    return state
-
-_HANDLER_MAP = {
-    "siteops": handle_siteops,
-    "procurement": handle_procurement,
-    "credit": handle_credit,
-}
-
-DEFAULT_CTA = {
-    "siteops":     {"id": "siteops",     "title": "🏗️ Manage My Site"},
-    "procurement": {"id": "procurement", "title": "⚡ Get Quick Quotes"},
-    "credit":      {"id": "credit",      "title": "💳 Get Credit Now"},
-}
-
+#-------------------------------------------------------------------------------
 
 #----------------------------User onboarding prompts-----------------------------
 NEW_USER_PROMPT = """
@@ -171,6 +113,87 @@ TRUSTED_USER_PROMPT = """  """
 
 #----------------------------------------------------------
 
+# ------------------------------------------------------------------
+# Placeholder downstream handlers (async)
+# ------------------------------------------------------------------Flatest
+async def handle_siteops(state: AgentState, latest_response: str, uoc_next_message_extra_data=None ) -> AgentState:
+    
+    state["messages"][-1]["content"] ="" # Setting this empty to make sure that the site opsn first run new sttae user 
+    state.update(
+        intent="siteops",
+        latest_respons=latest_response, 
+        uoc_next_message_type="button",
+        uoc_question_type="onboarding",
+        needs_clarification=True,  
+        uoc_next_message_extra_data=[uoc_next_message_extra_data],
+        agent_first_run=True
+    )
+    print("Random Agent::::: handle_siteops:::::  --Handling siteops intent --", state)
+    from agents.siteops_agent import run_siteops_agent
+    return await run_siteops_agent(state)
+
+
+
+async def handle_procurement(state: AgentState, latest_response: str, uoc_next_message_extra_data=None) -> AgentState:
+    print("Random Agent::::: handle_procurement:::::  --Handling procurement intent --")
+    try:
+        sender_id = state["sender_id"]
+        whatsapp_output(
+            sender_id,
+            "మీ దగ్గర ఉన్న వెరిఫైడ్ సెల్లర్ల నుంచి మెటీరియల్స్ రేట్స్ త్వరలో అందిస్తాం. అప్పటివరకు మీ సైట్ మేనేజ్ చేసే ఆప్షన్స్ చూడండి!",
+            "button",
+            [{"id": "siteops",     "title": "🏗️ Manage My Site"},{"id": "main_menu", "title": "⚡Main Menu"}]
+        )
+    except Exception as e:
+        log.error("Error in handle_procurement: %s", e)
+    state.update(
+        uoc_question_type="onboarding",
+        needs_clarification=True, 
+    )
+    print("Random Agent::::: handle_procurement:::::  --Handling procurement intent --", state)
+    #return  await run_procurement_agent(state)
+    return  await state  # return to the agent instead of the state. Ex return await run_procurement_agent(state)
+
+
+async def handle_credit(state: AgentState, latest_response: str, uoc_next_message_extra_data=None) -> AgentState:
+    #state.update(latest_respons="Let’s see if you’re eligible for credit.")
+    sender_id = state["sender_id"]
+    whatsapp_output(
+            sender_id,
+            "బిల్డింగ్ మ్యాటీరియల్స్‌ కొనుగోలుకు కావలసిన credit support త్వరలో అందుబాటులోకి వస్తుంది. అప్పటివరకు, site manage చేయడానికి ఉన్న options‌ని ఓసారి explore చేయండి — మీ site పనులకు చక్కగా ఉపయోగపడతాయి.",
+            "button",
+            [{"id": "siteops",     "title": "🏗️ Manage My Site"},{"id": "main_menu", "title": "⚡Main Menu"}])
+    state.update(
+        uoc_question_type="onboarding",
+        needs_clarification=True,  
+    )
+    print("Random Agent::::: handle_credit:::::  --Handling credit intent --", state)
+    return await state
+async def handle_main_menu(state: AgentState, latest_response: str, uoc_next_message_extra_data=None) -> AgentState:
+    state.update(
+        intent="random",
+        latest_respons="Welcome back! How can I assist you today?",
+        uoc_next_message_type="button",
+        uoc_question_type="onboarding",
+        needs_clarification=True,   
+        uoc_next_message_extra_data=[{"id": "siteops",     "title": "🏗️ Manage My Site"},{"id": "procurement", "title": "⚡ Get Quick Quotes"},{"id": "credit",      "title": "💳 Get Credit Now"}],
+    )
+    print("Random Agent::::: handle_main_menu:::::  --Handling main menu intent --", state)
+    return state
+_HANDLER_MAP = {
+    "siteops": handle_siteops,
+    "procurement": handle_procurement,
+    "credit": handle_credit,
+    "main_menu": handle_main_menu,
+}
+
+DEFAULT_CTA = {
+    "siteops":     {"id": "siteops",     "title": "🏗️ Manage My Site"},
+    "procurement": {"id": "procurement", "title": "⚡ Get Quick Quotes"},
+    "credit":      {"id": "credit",      "title": "💳 Get Credit Now"},
+}
+
+
 
 
 def generate_new_user_greeting(user_name: str) -> str:
@@ -196,7 +219,7 @@ def generate_trusted_user_greeting(user_name: str) -> str:
     return result.content
 
 
-async def classify_and_respond(state: AgentState) -> AgentState:
+async def classify_and_respond(state: AgentState,  config: dict) -> AgentState:
     last_msg   = (state["messages"][-1]["content"] or "").strip()
     last_lower = last_msg.lower()
     uoc_next_message_extra_data = state.get("uoc_next_message_extra_data", [])
@@ -220,13 +243,13 @@ async def classify_and_respond(state: AgentState) -> AgentState:
             state["latest_respons"] = greeting_message
             state["uoc_next_message_type"] = "button"
             state["uoc_question_type"] = "onboarding"
-            state["uoc_pending_question"] = True
+            state["needs_clarification"] = True
             state["agent_first_run"] = False
             state["user_verified"] = True
             state["uoc_next_message_extra_data"] = [
-                {"id": "siteops", "title": "🏗️ Manage My Site"},
-                {"id": "procurement", "title": "⚡ Get Quotes"},
-                {"id": "credit", "title": "💳 Credit Options"}
+                {"id": "siteops", "title": "📷 Share Site"},
+                {"id": "procurement", "title": "📦 Material Rates"},
+                {"id": "credit", "title": "💰 Get Credit"}
             ]
 
             
@@ -264,7 +287,7 @@ async def classify_and_respond(state: AgentState) -> AgentState:
     except Exception as e:
         log.error("Router LLM failure: %s", e)
         data = {}
-
+    print("Router::::::- Classify_and_respond:::::  --LLM response --", data)
     internal_msg_intent   = data.get("internal_msg_intent", "random")
     message  = data.get("message") or "Got it!"
     print("Router::::::- Classify_and_respond:::::  --Intent found: --", internal_msg_intent)
@@ -293,7 +316,7 @@ async def classify_and_respond(state: AgentState) -> AgentState:
         latest_respons=message,
         uoc_next_message_type="button",
         uoc_question_type="onboarding",
-        uoc_pending_question=True,  
+        needs_clarification=True,  
         uoc_next_message_extra_data=[cta],
     )
     return state  

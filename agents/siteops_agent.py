@@ -12,8 +12,10 @@ import re
 from tools.lsie import _local_sku_intent_engine
 from tools.context_engine import filter_tags, vector_search
 from models.chatstate import AgentState
-from unitofconstruction.uoc_manager import UOCManager
+from managers.uoc_manager import UOCManager
 from whatsapp.builder_out import whatsapp_output
+from database.uoc_crud import DatabaseCRUD
+  # <-- Add this import, adjust path as needed
 load_dotenv()
 
 llm_reasoning = ChatOpenAI(
@@ -160,188 +162,47 @@ import re
 
 # -------Prompts ------------------------
 NEW_USER_PROMPT = (
-    """You are a site engineer assistant responding on WhatsApp.Do NOT use headings or labels like 'Materials:', 'Labor:' or Note, etc. 
-Give insights point-wise, using bullets (•).Each bullet should feel like a verbal site update, grounded in what’s actually seen or inferred.Speak ONLY in Telugu. Use friendly, practical language like a smart, experienced engineer talking to a builder.
-Avoid formal textbook Telugu. Keep it natural. Dont assume anything that you are not very confident about waht you see”
+    """
+────────────────────────────────────
+ROLE
+• You're a calm, observant “smart site brain” who replies on WhatsApp.
+• Tone: confident, warm, and quietly impressive — like Apple meets a sharp site engineer.
+• You don’t oversell. You simply notice, log, and assist.
 
-────────────────────────────────────────────────────
-CONTEXT
-────────────────────────────────────────────────────
-user_name      = {{user_name}}           # plain name
-user_lang      = {{lang}}                # "te", "hi", "en"…
-honorifics     = { "te":"గారు", "hi":"जी", "ur":"साहिब", … }
-input = {
-    "type":  "photo" | "text" | "none",  # none ⇒ no user content yet
-    "caption": {{caption}},
-    "vision_tags": {{tags}}              # labels if photo
-}
+INPUT
+• User may send a photo or short message about site progress.
 
-stage          = "new"                   # first-ever SiteOps touch
+OUTPUT
+• 1 crafted message.
+    – First, react naturally to what’s visible or described.
+    – Mention the exact work observed (e.g., floor tiling, slab prep).
+    – If workers or materials are seen, note them subtly.
+    – Then explain, in one calm line, what you can do if they keep sending updates.
+    – Optionally, end with a soft CTA: “Want me to save this under a project?”
 
-────────────────────────────────────────────────────
-GOLDEN RULES
-────────────────────────────────────────────────────
-• Speak like a smart, practical site uncle in Telugu— warm, alert, and to the point.
-Respond in the user’s language (use honorifics).
-• Focus on what’s clearly seen — give grounded insights, not vague praise.
-• Output max 5 crisp points (1 line each), group by category (materials, labor, etc.).
-Add a tip pint liek this at the end or similar: "📂Tip: This update isn’t yet linked to a project.
-Start your project on Bab.ai — I’ll track, remind, and flag issues like a real site engineer.
-Let’s set it up? 📌"
-• Each line ≤ 120 characters. Use max 2 emojis total across all points.
-• Greet user as “<name> గారు” or "<name> sir" — based on user_lang.
-• If unsure of a native word, use plain English naturally — no awkward or archaic terms.
-• Never mention AI, system prompts, or internal steps. Just sound like a site-savvy human.
-• If project isn’t started yet, gently nudge to begin tracking in Bab.ai — like a real engineer would.
-────────────────────────────────────────────────────
-RESPONSE LOGIC
-────────────────────────────────────────────────────
-If **input.type in ("photo", "text")** ──────────────                                                                                                                      
-Nature of Work & Construction Method -
-Begin by naming the exact type of work: not just "wall work" or "concrete" — but:
-Brick masory
-Block masonry
-Two-coat plastering
-POP false ceiling grid
-Electrical conduit chasing
-Floor tiling with cement mortar bed
-Slab shuttering 
-Column reinforcement tying  etc..
+STYLE RULES
+✓ Never boast. Quietly amaze.
+✓ Feel helpful and personal — like you're watching out for them.
+✓ Don’t list features. Don’t explain how the system works.
+✓ Say “I can track everything from just photos & messages” only once, if at all.
+✓ If work is unclear, guess gently or ask — never fake confidence.
 
-Differentiate Visual Lookalikes (Misinterpretation Trap)
-Teach how to spot the difference between:
+EXAMPLE OUTPUT
 
-Plastered Wall vs Concrete Wall
-→ Plaster will often have patchy trowel marks or color tone differences.
-→ Concrete surfaces are more uniform, grey, and often form-marked.
+Looks like floor tiles were laid and a few cement bags went in. Logged that for you. ✅
+But I don’t stop there — I can follow up tomorrow, nudge your supervisor, and even spot patterns over time.
 
-POP Grid vs Shuttering
-→ POP grid will have thin metal channels (silver), while shuttering shows props, plywood/steel plates.
+Just send a photo or message here — no apps, no effort.
 
-Finished Brick Wall vs Brick Stack
-→ Completed walls show mortar joints and alignment.
-→ Stacks are messy and on the ground.
+I track everyone, every task, every day — like a site log that builds itself.
 
-Formwork Props vs Scaffolding
-→ Props support shuttering; scaffolding supports people.
-
-Specify the Construction Technique
-Once you detect the work, articulate how it's being done:
-
-Brick masonry → “Stretcher bond” or “Rat trap bond”
-
-Plastering → “Two-coat with floated finish” or “Single-coat with sponge finish”
-
-Conduit work → “Manual wall chasing with offset bends”
-
-Rebar work → “Double-loop tying with staggered overlaps”
-
-Tiling → “Cement mortar bed with spacers”
-
-This builds user trust and adds depth to the analysis.
-
-Explain the Engineering Reasoning
-Teach the why behind what you’re seeing, e.g.:
-
-“Stretcher bond ensures staggered joints — better lateral stability.”
-
-“Two-coat plaster helps level the wall and reduce cracks.”
-
-“Manual conduit chasing reduces concrete weakening compared to machine cutting.”
-
-“POP grids create leveled false ceilings for light fixtures and ducting.”
-
- Tone = Professor + Partner
-Talk like a warm, experienced professor on-site.
-
-Never arrogant, never robotic.
-
-Always observational, slightly conversational, and explaining to someone curious:
-2. Material State & Handling
-Only mention loose/raw materials. If something is not confidently inentified, say this look these like <material> but I am not sure. Do not list integrated ones. Dont mention anything if loose  materials are not visible. 
- 
-“Loose red soil scattered — mixing underway. Watch for spillage into walkway.”
-
-“Cement bags covered under tarp — good moisture protection.”
-
-“Shuttering sheets unused — may be excess stock from prior stage.”
-
-3. Labor Presence & Pattern
-Spot under/overstaffing or labor gaps.
-
-"Two workers visible " <Nocomment needed if there are no workers>
-
-“Two workers visible — adequate for prep, may need support if plaster begins.”
-
-“No dedicated mixer/helper visible — may slow down mortar supply.”
-
-4. Tools & Equipment Usage
-Mention tools actively used or visibly idle.
-
-“Trowel and patra in use — wall finishing in early stage.”
-
-“No water hose spotted — curing preparation unclear.”
-
-5. Execution Quality
-Comment on the finishing, alignment, or errors.
-
-“Mortar joints aligned well — no vertical gap noticed.”
-
-“Top course uneven — may need correction before plaster.”
-
-6. Missing Elements / Risks
-Mention any safety/technical gaps. - Menrion what they are as well as the risk they pose
-
-“No PPE visible — safety risk.”
-
-“No curing tools seen — risk of shrinkage cracks.”
-
-📦 L3: Contextual Assurance + Action Nudge
-If no project attached:
-
-“I haven’t tied this to any project yet. Once you set it up in Bab.ai, I’ll store every photo, track work phase by phase, and remind you like your best site engineer. Ready to begin? 🚀”
-If **input.type == "none"** ─────────────────────────
-  L1  Greeting + playful opener  
-      – “రమేష్ గారు, మీ సైట్‌ భారం కొంత నా భుజాలపై వేసుకోమంటారా?”  
-
-  L2  Two-beat magic teaser  
-      – “ఒక ఫోటో పంపితే నేనే టైమ్‌లైన్ నడిపిస్తా, దాచిన లోపాలూ పట్టిస్తా ✨”  
-
-  L3  Invitation  
-      – “మొదటి స్నాప్ / మెసేజ్ షేర్ చెయ్యండి; డైరీ ప్రారంభిస్తా 😊”  
-
-────────────────────────────────────────────────────
-STYLE REMINDERS
-────────────────────────────────────────────────────
-• No words like *progress / risk / material log* — show, don’t label.  
-• Concrete insights > generic promises.  
-• Make privacy implicit: “నా నోట్స్‌లో ఉంచుకుని” (I’ll store quietly).  
-• Keep it human, concise, delightful.
-────────────────────────────────────────────────────
-SMART BUTTON LOGIC:
-────────────────────────────────────────────────────
-• Add a single smart follow-up button (≤20 characters).
-• This should teach the most important concept *seen or implied* in the scene.
-• If a construction technique is used (e.g. stretcher bond), make the button about that: 
-  → e.g. “ℹ️ What is a Bond?”
-• If a safety risk is major (e.g. open rebar, no PPE), the button can highlight it:
-  → e.g. “⚠️ How to handle iron”
-• Must find one insight from the scene to teach. A very important insight that the user should know.
-────────────────────────────────────────────────────
-Output format:
-────────────────────────────────────────────────────
-OUTPUT FORMAT (JSON only, no commentary):
-{
-    "message": "<All of the above insghits as directed in the prompt>",
-    "smart_button": <One short button (≤20 chars) for a site tip or micro-lesson>
-
-  }
-}
+📂 Want me to save this under a project name, so I can track all future work in one place?
 
 
 
 
 """
+
 )
 
 
@@ -446,77 +307,125 @@ def get_context_and_tags(state: dict) -> Tuple[str, str]:
 #     return None 
 
 
-#---------------- First run user stage flows--------------
-#---------------------------------------------------------
-def new_user_flow(state: AgentState) -> AgentState:
-   
-    last_msg = state["messages"][-1]["content"] if state.get("messages") else ""
-    user_name = state.get("user_full_name", "There")
-    sender_id = state["sender_id"]
-    
-    print("SiteOps Agent:::: new_user_flow : last_msg is: -", last_msg)
-    print("SiteOps Agent:::: new_user_flow : sitops conversation log  is: -", state.get("siteops_conversation_log", []))
+
+async def handle_siteops(state: AgentState, crud: DatabaseCRUD,latest_response: str, uoc_next_message_extra_data=None ) -> AgentState:
+    #handle a message here 
+    state.update(
+        intent="siteops",
+        latest_respons=latest_response, 
+        uoc_next_message_type="button",
+        uoc_question_type="siteops_welcome",
+        needs_clarification=True,  
+        uoc_next_message_extra_data=[uoc_next_message_extra_data],
+        agent_first_run=True
+    )
+    print("Siteops Agent::::: handle_siteops:::::  --Handling siteops intent --", state)
+    return state    
+
+def handle_main_menu(state: AgentState, crud: DatabaseCRUD, latest_response: str, uoc_next_message_extra_data=None) -> AgentState:
+    state.update(
+        intent="random",
+        latest_respons=latest_response,
+        uoc_next_message_type="button",
+        uoc_question_type="siteops_welcome",
+        needs_clarification=True,   
+        uoc_next_message_extra_data=uoc_next_message_extra_data,
+    )
+    print("Random Agent::::: handle_main_menu:::::  --Handling main menu intent --", state)
+    return state
+
+async def handle_micro_lesson(state:AgentState, crud: DatabaseCRUD, latest_response:str, uoc_next_message_extra_data= None) -> AgentState:
     msg_obj = (state["siteops_conversation_log"][-1]["content"]) if state.get("siteops_conversation_log") else {}
     # msg_obj = safe_json(msg_obj, default={})
     msg_obj= safe_json(msg_obj, default={}) if isinstance(msg_obj, str) else ""
     message_from_previous = msg_obj.get("message", "") if isinstance(msg_obj, dict) else ""
     topic_to_be_covered = msg_obj.get("smart_button", "") if isinstance(msg_obj, dict) else ""
-    # message_from_previous = msg_obj.get("message", "")
-    # topic_to_be_covered = msg_obj.get("smart_button", "") 
-    print("SiteOps Agent:::: new_user_flow : message_from_previous is: -", message_from_previous, "topic_to_be_covered is: -", topic_to_be_covered)
-    print("SiteOps Agent:::: new_user_flow : msg_obj is: -", msg_obj)
-    #-------------------------------------------------------------
-    # If message is a Micro Lesson - write a webiste scraper for this topc to summarize. 
-    #-------------------------------------------------------------
-    if last_msg == "micro_lesson":
-        print("SiteOps Agent:::: new_user_flow : Started micro_lesson")
-        topic = topic_to_be_covered if topic_to_be_covered else "Construction Basics"
-        user_lang = 'Telugu'  
-        micro_lesson_prompt = f"""
-    You are a kind and super-smart construction teacher. Your job is to explain tough topics in simple words,
-    as if teaching a curious 5-year-old who's helping on-site.
+    print("SiteOps Agent:::: new_user_flow : Started micro_lesson")
+    topic = topic_to_be_covered if topic_to_be_covered else "Construction Basics"
+    user_lang = 'Telugu'
+    micro_lesson_prompt = f"""
+You are a master builder-mentor. Explain **{topic}** so that even a curious
+20-year-old helper and a seasoned contractor both say “aha!”.
 
-    TASK:
-    ====
-    1. Search the internet and include accurate, practical knowledge about the topic: "{topic}".
-    2. Your visual reference is: "{message_from_previous}" — it helps you ground the explanation.
-    3. Include real-world facts: dimensions, IS/ASTM code references, common site practices, best tips.
-    4. Now become a friendly on-site teacher. Explain the concept in exactly 5 short sentences:
-• Each sentence ≤ 100 characters.
-• Use simple words and practical site analogies.
-• If the topic is a **work/task**: explain what it is, why it’s done, and name 2 other methods (pros/cons).
-• If it's a **risk**: explain the risk, its cause, and 2 practical ways to prevent or reduce it.
-• If it’s a **material**: describe its use, key properties, and 2 alternatives with trade-offs.
-• Include at least 1 expert tip based on field best practices, or mistakes to avoid. - Search from quora, reddit, youtube, blogs or constrcution forums. - Dont assume/imagine any information. BE very factual and smart. 
-    5. Respond this language: '{user_lang}'  # e.g. 'en' or 'te'
+RULES OF ENGAGEMENT
+===================
+1️⃣  Search credible sources (IS/ASTM, field handbooks, failure reports,
+    expert YouTube demos, high-quality threads). Quote numbers ONLY if verifiable.
 
-    DO NOT:
-    ====
-    - Do not include titles, headings, markdown, or lists.
-    - Do not say “here’s your answer” or “lesson below”.
+2️⃣  Deliver **exactly 6 bullets** – each ≤ 140 chars.
+    • Bullets 1-3  = BASICS (what, why, 1 everyday detail + 1 common slip-up).
+    • Bullets 4-6  = ADVANCED (killer fact / failure story / code clause /
+                      pro hack / cost metric). End with **[TRY]** or **[CHECK]**
+                      action tag the reader can do next shift.
 
-    Just give the 5-sentence micro-lesson output. Be fun, clear, and wise.
-    """
-        try:
-            response = llm.invoke([
+3️⃣  ✨ Use 1 “wow” emoji max (⚠️, 💡, 🔍, 🚧, 🔑). No other fluff.
+
+4️⃣  No headings, no markdown, no numbering – just six crisp lines.
+
+DON’TS
+======
+• No invented data. Skip if uncertain.
+• No brand names or sales pitch.
+• No “here’s your answer” filler.
+
+Language: {user_lang}
+"""
+    try:
+        response =await llm.ainvoke([
             SystemMessage(content=micro_lesson_prompt),
             HumanMessage(content=f"Please explain: {topic}")
-            ])
-            response_text = getattr(response, "content", str(response))
-        except Exception as e:
-            response_text = "Sorry, I couldn’t fetch the lesson right now. Try again in a bit."
-            print("LLM Error:", e)
+        ])
+        response_text = getattr(response, "content", str(response))
+    except Exception as e:
+        response_text = "Sorry, I couldn’t fetch the lesson right now. Try again in a bit." 
+        print("LLM Error:", e)
 
-        print("🧠 Micro-lesson output:", response_text)
-        print("SiteOps Agent:::: new_user_flow : user_stage is new")
-        state["latest_respons"] = response_text
-        state["uoc_next_message_extra_data"] =[]
-        state["uoc_next_message_type"] = "plain"
-        print("SiteOps Agent:::: new_user_flow : latest_response is set", state)
-        return state
-    #-------------------------------------------------------------
+    print("Micro-lesson output:", response_text)
+    print("SiteOps Agent:::: new_user_flow : user_stage is new")
+    state["latest_respons"] = response_text
+    state["uoc_next_message_extra_data"] = []
+    state["uoc_next_message_type"] = "button"
+    state["uoc_next_message_extra_data"] = [
+    {"id": "project_onboarding", "title": "📁 Add to Project"},
+    {"id": "main_menu", "title": "🏠 Main Menu"}
+]
+    print("SiteOps Agent:::: new_user_flow : latest_response is set", state)
+    return state
+
+
+async def handle_project_onboarding(state:AgentState,  crud: DatabaseCRUD, latest_response:str, uoc_next_message_extra_data= None) -> AgentState:
+    uoc_last_called_by =  "siteops"
+    uoc_mgr = UOCManager(crud)
+    return await uoc_mgr.resolve_uoc(state,uoc_last_called_by)
+
+
+_HANDLER_MAP = {
+      "siteops": handle_siteops,
+    #"procurement": handle_procurement,
+    #"credit": handle_credit,
+    "main_menu": handle_main_menu,
+    "micro_lesson": handle_micro_lesson,
+    "project_onboarding" : handle_project_onboarding
+}
+
+
+
+
+#---------------- First run user stage flows--------------
+#--------------------------------------------------------- 
+
+async def new_user_flow(state: AgentState,latest_msg_intent:str, crud: DatabaseCRUD) -> AgentState:
    
-   
+    
+    last_msg = state["messages"][-1]["content"] if state.get("messages") else ""
+    user_name = state.get("user_full_name", "There")
+    sender_id = state["sender_id"]
+    uoc_next_message_extra_data = state.get("uoc_next_message_extra_data", [])
+    latest_response = state.get("latest_respons", None)
+    print("SiteOps Agent:::: new_user_flow : last_msg is: -", last_msg)
+    print("SiteOps Agent:::: new_user_flow : sitops conversation log  is: -", state.get("siteops_conversation_log", []))
+    print("SiteOps Agent:::: new_user_flow : the state received here is : -", state)
+
     img_b64 = None
     img_path = state.get("image_path")
     if img_path:
@@ -528,6 +437,7 @@ def new_user_flow(state: AgentState) -> AgentState:
           state["siteops_conversation_log"].append({
     "role": "user", "content": img_b64 if img_b64 else last_msg + "\n" + state.get("caption", "")
 })
+    
     if state.get("agent_first_run", True):
         if last_msg == "":
             print("SiteOps Agent:::: run_siteops_agent : latest_response is not set")
@@ -538,7 +448,7 @@ def new_user_flow(state: AgentState) -> AgentState:
             state["latest_respons"] = greeting_message
             state["uoc_next_message_type"] = "button"
             state["uoc_question_type"] = "siteops_welcome"
-            state["uoc_pending_question"] = True
+            state["needs_clarification"] = True
             state["agent_first_run"] = False
             state["user_verified"] = True
             state["uoc_next_message_extra_data"] = [
@@ -546,17 +456,17 @@ def new_user_flow(state: AgentState) -> AgentState:
                 {"id": "procurement", "title": "⚡ Get Quotes"}, 
                 {"id": "credit", "title": "💳 Credit Options"},
             ]
-
+ 
             return state
         else:
             print("SiteOps Agent:::: run_siteops_agent : Last message/ Image is found")
             caption = state.get("caption", "")
             if img_b64:
                 whatsapp_output(
-                    sender_id,
-                    f"👷‍♂️ హాయ్ {user_name} గారు! 📸 మీరు పంపిన ఫోటో అందింది.\n\nఇప్పుడు మీ site ఫోటో ని చూస్తూ, ముఖ్యమైన విషయాలు గమనిస్తున్నాను. ఇంకొద్ది సేపట్లో మీకు పూర్తి అప్డేట్ ఇస్తా! 🔍🧱",
-                    message_type="plain",
-                )
+    sender_id,
+    f"Hey 👋\n\nGot your photo. Give me a sec — scanning this carefully. 🔍",
+    message_type="plain",
+)
                 combined = caption if caption else ""
             else:
                 combined = last_msg
@@ -565,32 +475,67 @@ def new_user_flow(state: AgentState) -> AgentState:
 
             greeting_message = generate_new_user_greeting(user_name, combined, img_b64)
             parsed_message = safe_json(greeting_message, default={"message": "", "smart_button": ""})
-
-# Extract values with fallback defaults
+            print("SiteOps Agent:::: run_siteops_agent : parsed_message:", parsed_message, greeting_message)
             message = parsed_message.get("message", "")
             smart_button_text = parsed_message.get("smart_button", "")
-            state["siteops_conversation_log"].append({
-    "role": "assistant", "content":  greeting_message 
-})
+            state["siteops_conversation_log"].append({"role": "assistant", "content":  greeting_message })
             print("SiteOps Agent:::: run_siteops_agent : siteops_conversation_log:", state["siteops_conversation_log"])
             print("SiteOps Agent:::: run_siteops_agent : generating new user greeting", message)
-            state["latest_respons"] = message
+            state["latest_respons"] = greeting_message
             state["uoc_next_message_type"] = "button"
             state["uoc_question_type"] = "siteops_welcome"
-            state["uoc_pending_question"] = True
+            state["needs_clarification"] = True
             state["agent_first_run"] = False
             state["user_verified"] = True
             state["uoc_next_message_extra_data"] = [
-                {"id": "siteops", "title": "📁 Start Project"},
-                {"id": "micro_lesson", "title": smart_button_text},
-                {"id": "credit", "title": "💳 Buy & Pay Later"},
-            ]
+    #{"id": "micro_lesson", "title": "ℹ️ Learn More"}, 
+    {"id": "project_onboarding", "title": "📁 Add to Project"},
+    {"id": "main_menu", "title": "🏠 Main Menu"}
+]
             print("SiteOps Agent:::: run_siteops_agent : latest_response is set", state)
             return state
+    #This becomes true from second message onwards.
     else:
         print("SiteOps Agent:::: run_siteops_agent : agent_first_run is False")
-        
-        # The user as long as he doesnt select identification/ project setup stage(If the ID is not set, we will prompt there), he will be in this flow
+        if last_msg in _HANDLER_MAP:
+            #The main menu for new user.
+            if last_msg =="main_menu":
+                latest_response = "Welcome back! How can I assist you today?"
+                uoc_next_message_extra_data =[{"id": "siteops", "title": "🏗️ Manage My Site"},
+                                          {"id": "procurement", "title": "⚡ Get Quick Quotes"},
+                                          {"id": "credit",      "title": "💳 Get Credit Now"}] 
+            return await _HANDLER_MAP[last_msg](state, crud, latest_response, uoc_next_message_extra_data)
+        else:
+            print("SiteOps Agent:::: new_user_flow:::: Button is note selected")
+            if latest_msg_intent == "random":
+                from agents.random_agent import classify_and_respond
+                return await classify_and_respond(state)
+            elif latest_msg_intent == "siteops":
+                latest_response = "📷 Ready to check your site? Let's continue!"
+                uoc_next_message_extra_data = {"id": "siteops", "title": "📁 Continue Site Setup"}
+                return await handle_siteops(state, latest_response, uoc_next_message_extra_data)
+            # elif latest_msg_intent == "procurement":
+            #     latest_response = "🧱 Tell me what materials you're looking for, and I'll fetch quotes!"
+            #     return await handle_procurement(state, latest_response)
+            # elif latest_msg_intent == "credit":
+            #     latest_response = "💳 Let's explore credit options suitable for your site."
+            #     return await handle_credit(state, latest_response)
+            else:
+                state["latest_respons"] = (
+                    "🤔 I'm not sure what you're looking for. "
+                    "Please choose an option below."
+                )
+                state["uoc_next_message_type"] = "button"
+                state["uoc_question_type"] = "main_menu"
+                state["needs_clarification"] = True
+                state["uoc_next_message_extra_data"] = [
+                    {"id": "siteops", "title": "🏗️ Manage My Site"},
+                    {"id": "procurement", "title": "⚡ Get Quick Quotes"},
+                    {"id": "credit", "title": "💳 Get Credit Now"}
+                ]
+                return state
+
+        # The user a s long as he doesnt select identification/ project setup stage(If the ID is not set, we will prompt there), he will be in this flow
         # If the user has sent a message or image, we will process it, respond, and nudeg him to identification stage/ project setup stage
         # The new user responded again with a message or image. Take necessary action and lead him to identification stage
         # User might click on a button or send a message. If the user clicks a button we will lead him to repective flow.
@@ -602,30 +547,39 @@ def new_user_flow(state: AgentState) -> AgentState:
 # ---------------------------------------------------------------------------
 # Main public entry
 # ---------------------------------------------------------------------------
-async def run_siteops_agent(state: AgentState) -> AgentState:
-     
-    state.setdefault("siteops_conversation_log", [])
+async def run_siteops_agent(state: AgentState, config: dict) -> AgentState:
     print("SiteOps Agent:::: run_siteops_agent : called")
+    print("SiteOps Agent:::: run_siteops_agent : config received =>", config)
+    try:
+        crud = config["configurable"]["crud"]
+        uoc_mgr = UOCManager(crud)
+    except Exception as e:
+        print("SiteOps Agent:::: run_siteops_agent : failed to initialize crud or UOCManager:", e)
+        state["latest_respons"] = "Sorry, there was a system error. Please try again later."
+        return state
+    
+    state.setdefault("siteops_conversation_log", [])
+    
     last_msg = state["messages"][-1]["content"] if state.get("messages") else ""
-    print("SiteOps Agent:::: run_siteops_agent : last_msg:", last_msg)
-
-    # ------ ---- 1 · Summarise update & build context ----------
-    #ctx_block = get_context_and_tags(state)
-    #print("SiteOps Agent:::: run_siteops_agent : ctx_block:", ctx_block)
-    #state["context"] = ctx_block
-    #state["context_tags"] = ctx_tags
-
-
-    # ---------- 2 · UOC resolution (first run only) ----------
-  
-        
+    print("SiteOps Agent:::: run_siteops_agent : last_msg:", last_msg)     
     user_stage = state.get("user_stage", {})
-        
     print("SiteOps Agent:::: run_siteops_agent : user_stage:", user_stage)
-        
+    
+
+    # because when we call the orchstrator it correctly extracts the inteded message,
+    # but since this state is passed after an image analysis, the image pathis still found - 
+    # what we are actually doing when her eis we are inculding this obtained message along with the image path -
+    #  that is why we are seeing the sitops intent. To overcoem this issue we are passing a new state with path set to ""
+    state_for_intent_match = state.copy()
+    state_for_intent_match["image_path"]="" if last_msg else state.get("image_path","")
+    from orchastrator.core import infer_intent_node
+    latest_msg_intent = (await infer_intent_node(state_for_intent_match)).get("intent")
+
+    print("SiteOps Agent:::: run_siteops_agent - Intent of latest message is - ", latest_msg_intent)
+
     if user_stage == "new":
          print("SiteOps Agent:::: run_siteops_agent : user_stage is new")
-         return new_user_flow(state)
+         return await new_user_flow(state, latest_msg_intent, crud)
     elif user_stage == "identified":
           # existing_user_flow(sender_id, last_msg, state, user_name, img_b64)
           pass
@@ -638,63 +592,12 @@ async def run_siteops_agent(state: AgentState) -> AgentState:
 
         # This is an existing code that checks with UOC manager. We have to place this code in relevant user stage
     print("SiteOps Agent:::: run_siteops_agent : agent_first_run is True")
-    uoc_mgr = UOCManager()
     state = await uoc_mgr.resolve_uoc(state, "siteops")
 
     if state.get("uoc_confidence") == "low":
         state["agent_first_run"] = False
         return state
 
-    # ---------- 3 · Reasoning --------------------------------
-    reasoning_input = state["messages"][-1]["content"]
-    result = _get_reason(state, reasoning_input)
-
-    # ---------- 4 · Save response to chat state --------------
-    state["latest_response"] = result
-
-    state["messages"].append({"role": "assistant", "content": result})
     state["agent_first_run"] = False
     return state
 
-
-# ---------------------------------------------------------------------------
-# Helper 3 · Reasoning prompt & call
-# ---------------------------------------------------------------------------
-def _get_reason(state: dict, user_update: str) -> str:
-    prompt = (
-        "You are a construction-site reasoning assistant.\n"
-        "Given:\n"
-        "1. User update text.\n"
-        "2. Site note (single highlight).\n"
-        "3. Context tags / guidelines.\n"
-        "4. UOC snapshot (project meta).\n\n"
-        "Compare the update with expectations.\n"
-        "Output concisely:\n"
-        "Risks: <one line>\n"
-        "Actionable Items:\n"
-        " - bullet 1\n"
-        " - bullet 2 (max 3 bullets)\n"
-        "Next Stage Preparations:\n"
-        " - bullet 1\n"
-        "Potential Financial Impact: <one line>\n"
-        "If info is insufficient → 'No relevant comparison possible'."
-    )
-
-    note = state.get("latest_site_note", {})
-    tags = state.get("context_tags", "")
-    uoc_snapshot = json.dumps(state.get("uoc", {}).get("data", {}), indent=2)
-
-    chat = llm_reasoning.invoke(
-        [
-            SystemMessage(content=prompt),
-            HumanMessage(
-                content=(
-                    f"User update:\n{user_update}\n\n"
-                    f"Site note:\n{note}\n\n"
-                    f"Tags:\n{tags}\n\n"
-                    f"UOC snapshot:\n{uoc_snapshot}"
-                )
-            ),
-        ]
-    )
-    return chat.content.strip()

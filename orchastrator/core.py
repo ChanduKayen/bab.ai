@@ -179,6 +179,8 @@ async def infer_intent_node(state: AgentState) -> AgentState:
     print()
     print("Orchestrator::::: infer_intent_node::::: -- Orchestrator called -- ", state)
     last_msg = state["messages"][-1]["content"]
+    print("Orchestrator::::: infer_intent_node::::: -- last message in orchestrator - ", state)
+    print("ORchestrator::::infre intent node:::: - messges found - ", last_msg)
     image_caption = state.get("caption", None)
     image_path = state.get("image_path", None)
     #print("Last Message -", last_msg)
@@ -188,6 +190,7 @@ async def infer_intent_node(state: AgentState) -> AgentState:
     if image_path:
         print("Orchestrator::::: infer_intent_node:::::  --Image path found: --", image_path)
         messages = build_intent_prompt(image_path=image_path, message_text=combined_input)
+        
         response = openai.chat.completions.create(
             model="gpt-4o",
             messages=messages,
@@ -208,7 +211,7 @@ async def infer_intent_node(state: AgentState) -> AgentState:
 
         return state
 
-
+    print("Orchestrator::::: infer_intent_node::::: Before LLM Call")
     system_prompt = (
         "You are an intent router for a construction procurement assistant.\n"
         "Given the user message, return the name of the agent that should handle it.\n"
@@ -217,21 +220,28 @@ async def infer_intent_node(state: AgentState) -> AgentState:
        "Respond ONLY with one of: procurement, credit, transport, siteops, random"
     )
     
-    chat_response = await llm.ainvoke([
-        SystemMessage(content=system_prompt),
-        HumanMessage(content=last_msg)
-    ])
-    
+    try:
+        chat_response = await llm.ainvoke([
+            SystemMessage(content=system_prompt),
+            HumanMessage(content=last_msg)
+        ])
+    except Exception as e:
+        print("Orchestrator::::: infer_intent_node::::: LLM call failed:", e)
+        state["intent"] = "random"
+        return state
+    print("Orchestrator::::: infer_intent_node::::: After LLM Call")
     
 
     intent = chat_response.content.strip().lower()
+    
     print("Orchestrator::::: infer_intent_node:::::  --Intent of text found: --", intent)
     state["intent"] = intent
     #print("Orchestrator::::: ++++++++++++++State after intent inference in orchestrator", state)
-
+    
     return state
 
 def intent_router(state: AgentState) -> str:
+     print("Orchestrator::::: intent_router:::::")
      return state["intent"]
 
 
@@ -240,7 +250,7 @@ def intent_router(state: AgentState) -> str:
 async def cleanup_node(state: AgentState) -> AgentState:
     keys_to_remove = [
         "image_path", "caption", "media_id", "context_tags", "context",
-        "uoc", "uoc_confidence", "uoc_pending_question", "uoc_last_called_by",
+        "uoc", "uoc_confidence", "needs_clarification", "uoc_last_called_by",
         "agent_first_run", "latest_response", "messages", "sender_id", "intent",
         "insights"
     ]
@@ -250,29 +260,34 @@ async def cleanup_node(state: AgentState) -> AgentState:
     return state
 
 # Add node
-builder_graph.add_node("infer_intent", infer_intent_node)
-builder_graph.add_node("procurement", run_procurement_agent)
-#builder_graph.add_node("credit", run_credit_agent)
-builder_graph.add_node("siteops", run_siteops_agent)
-builder_graph.add_node("random", classify_and_respond)
-builder_graph.add_node("cleanup", cleanup_node)
+try:
+    builder_graph.add_node("infer_intent", infer_intent_node)
+    builder_graph.add_node("procurement", run_procurement_agent)
+    #builder_graph.add_node("credit", run_credit_agent)
+    builder_graph.add_node("siteops", run_siteops_agent)
+    builder_graph.add_node("random", classify_and_respond)
+    builder_graph.add_node("cleanup", cleanup_node)
+except Exception as e:
+    print("Error adding nodes to builder_graph:", e)
 
 # Flow setup
-builder_graph.set_entry_point("infer_intent")
-builder_graph.add_conditional_edges(
-    source="infer_intent",
-    path=intent_router,  # LLM node that returns agent label
-    path_map={
-        "procurement": "procurement",
-        #"credit": "credit",
-        "random": "random",  # fallback
-        "siteops": "siteops"
-    }
-)
+try:
+    builder_graph.set_entry_point("infer_intent")
+    builder_graph.add_conditional_edges(
+        source="infer_intent",
+        path=intent_router,  # LLM node that returns agent label
+        path_map={
+            "procurement": "procurement",
+            #"credit": "credit",
+            "random": "random",  # fallback
+            "siteops": "siteops"
+        }
+    )
 
+    builder_graph.add_edge("procurement", "cleanup")
+    builder_graph.add_edge("siteops", "cleanup")
+    #builder_graph.add_edge("random", "cleanup")
 
-builder_graph.add_edge("procurement", "cleanup")
-builder_graph.add_edge("siteops", "cleanup")
-#builder_graph.add_edge("random", "cleanup")
-
-builder_graph = builder_graph.compile()
+    builder_graph = builder_graph.compile()
+except Exception as e:
+    print("Error setting up builder_graph flow:", e)

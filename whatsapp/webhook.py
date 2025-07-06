@@ -3,7 +3,8 @@ from orchastrator.core import builder_graph
 import sys
 from fastapi.responses import PlainTextResponse
 import os
-from unitofconstruction.uoc_manager import UOCManager
+from dotenv import load_dotenv
+from managers.uoc_manager import UOCManager
 router = APIRouter()
 from app.logging_config import logger
 import requests
@@ -15,9 +16,18 @@ import agents.siteops_agent as siteops_agent
 from agents.random_agent import classify_and_respond
 from whatsapp.builder_out import whatsapp_output
 from users.user_onboarding_manager import user_status
-WHATSAPP_API_URL = "https://graph.facebook.com/v19.0/651218151406174/messages"
-ACCESS_TOKEN = "EAAIMZBw8BqsgBOZBZCg0rECIikE16gfEEy7ee8aTD1PdZBhIEAmNtAIUxcTy7AKpfPCfsKjZCTuHFIKycFIrxiBpnz0NhbZCHzgzAEW3XM16dmSJz78hJzDr5ncrta4vexKCxXwEUIpzfebMiZBKWm9VHZB1XoYxTxeTpZCsMUooegw2aZC7iJItPw7BwoxtvBoImZCmtvO4AUJdfgbkCuWsIXl2GeqVh2TOZCAZD"  
-#ACCESS_TOKEN = os.getenv("WHATSAPP_ACCESS_TOKEN")
+from database._init_ import AsyncSessionLocal
+from database.uoc_crud import DatabaseCRUD
+from managers.uoc_manager import UOCManager
+
+
+load_dotenv(override=True)
+
+#This has to be updated accroding to he phone number you are using for the whatsapp business account.
+WHATSAPP_API_URL = "https://graph.facebook.com/v19.0/712076848650669/messages"
+#ACCESS_TOKEN = "EAAIMZBw8BqsgBO4ZAdqhSNYjSuupWb2dw5btXJ6zyLUGwOUE5s5okrJnL4o4m89b14KQyZCjZBZAN3yZBCRanqLC82m59bGe4Rd2BPfRe3A3pvGFZCTf2xB7a6insIzesPDVMLIw4gwlMkkz7NGl3ZBLvP5MU8i3mZBMmUBShGeQkSlAyRhsXJtlsg8uGaAfYwTid8PZAGBKnbOR3LFpCgBD8ZCIMJh9xI0sHWy"  
+
+ACCESS_TOKEN = os.getenv("WHATSAPP_ACCESS_TOKEN")
 
 # implementing a presistnace layer to preseve the chat history tha saves the state of messages for followup questions required by UOC manager 
 #r = redis.Redis(host='localhost', port=6379, decode_responses=True)
@@ -40,7 +50,7 @@ def get_state(sender_id: str):
     #         "sender_id": sender_id,   
     #         "messages": [],
     #         "agent_first_run": True,             
-    #         "uoc_pending_question": False,
+    #         "needs_clarification": False,
     #         "uoc_last_called_by": None, 
     #         "uoc_confidence": "low",
     #         "uoc": {},                           
@@ -56,7 +66,7 @@ def get_state(sender_id: str):
     #         "sender_id": sender_id,   
     #         "messages": [],
     #         "agent_first_run": True,             
-    #         "uoc_pending_question": False,
+    #         "needs_clarification": False,
     #         "uoc_last_called_by": None,
     #         "uoc_confidence": "low",
     #         "uoc": {},                           
@@ -91,7 +101,7 @@ def download_whatsapp_image(media_id: str) -> str:
     #Get media URL 
     media_info_url = f"https://graph.facebook.com/v19.0/{media_id}"
     headers = {"Authorization": f"Bearer {ACCESS_TOKEN}"}
-    print("Webhook :::::: download_whatsapp_image::::: Failed to get media URL:",media_id)
+    print("Webhook :::::: download_whatsapp_image::::: Got media URL:",media_info_url)
     res = requests.get(media_info_url, headers=headers)
     
     if res.status_code != 200:
@@ -147,6 +157,7 @@ async def verify(request: Request):
 @router.post("/webhook")
 async def whatsapp_webhook(request: Request):
     print("Webhook :::::: whatsapp_webhook::::: ####Webhook Called####")
+    
     try:
         logger.info("Entered Webhook route")
         data = await request.json()
@@ -181,7 +192,7 @@ async def whatsapp_webhook(request: Request):
                 "sender_id": sender_id,
                 "messages": [],  
                 "agent_first_run": True,             
-                "uoc_pending_question": False,
+                "needs_clarification": False,
                 "uoc_last_called_by": None,
                 "uoc_confidence": "low",
                 "uoc": {}, 
@@ -194,6 +205,7 @@ async def whatsapp_webhook(request: Request):
         if msg_type == "text":
             text = msg["text"]["body"]
             state["messages"].append({"role": "user", "content": text})
+            state["msg_type"] = "text"
 
         elif msg_type == "image":
             media_id = msg["image"]["id"]
@@ -208,6 +220,8 @@ async def whatsapp_webhook(request: Request):
             state["media_id"] = media_id  
             state["image_path"] = image_path  
             state["caption"] = caption
+            state["msg_type"] = "image"
+            state["media_url"] = image_path
 
             print("Webhook :::::: whatsapp_webhook::::: Image downloaded and saved at:", image_path)
         elif msg_type == "interactive":
@@ -220,9 +234,64 @@ async def whatsapp_webhook(request: Request):
                 reply_id = "unknown_interactive"
     
             state["messages"].append({"role": "user", "content": reply_id})
+            state["msg_type"] = "interactive"
             print(f"Webhook :::::: whatsapp_webhook::::: Captured interactive reply: {reply_id}")
 
+        elif msg_type == "document":
+            media_id  = msg["document"]["id"]
+            file_name = msg["document"].get("filename", "document")
 
+            # Fetch download URL & metadata
+            meta_resp = requests.get(
+                f"https://graph.facebook.com/v19.0/{media_id}",
+                params={"access_token": ACCESS_TOKEN},
+                timeout=10,
+            )
+
+            if meta_resp.status_code != 200:
+                print("Webhook :::::: Failed to fetch document meta:", meta_resp.text)
+                return {"status": "ignored", "reason": "Cannot fetch document"}
+            
+            media_info = meta_resp.json()
+            media_url  = media_info.get("url")
+            mime_type  = media_info.get("mime_type", "")
+            
+            # Decide file type
+            file_type = "pdf" if mime_type == "application/pdf" else "document"
+
+            # Download the file
+            ext = ".pdf" if file_type == "pdf" else ".bin"
+            local_path = f"C:/Users/koppi/OneDrive/Desktop/Bab.ai/{media_id}{ext}"
+            try:
+                file_data = requests.get(media_url, timeout=10).content
+                with open(local_path, "wb") as fp:
+                    fp.write(file_data)
+                print(f"Webhook :::::: Saved document to {local_path}")
+            except Exception as e:
+                print("Webhook :::::: Failed to download and save document:", e)
+                return {"status": "ignored", "reason": "Failed to download"}
+
+            # Try optional text extraction for PDFs
+            if file_type == "pdf":
+                try:
+                    import fitz  # PyMuPDF
+                    doc = fitz.open(local_path)
+                    pdf_text = "".join(page.get_text() for page in doc)
+                    doc.close()
+                    state["pdf_text"] = pdf_text
+                except Exception as e:
+                    print("Webhook :::::: PDF text extraction failed:", e)
+
+            # Add synthetic user message & metadata
+            state["messages"].append({
+                "role": "user",
+                "content": f"[Document ID: {media_id}] {file_name}"
+            })
+
+            state["media_id"] = media_id
+            state["file_name"] = file_name
+            state["msg_type"] = file_type
+            state["media_url"] = local_path
         else:
             return {"status": "ignored", "reason": f"Unsupported message type {msg_type}"}
 
@@ -234,12 +303,12 @@ async def whatsapp_webhook(request: Request):
         # we are checking what the message is about and whom to call - orchastrator or agent; we call orcha strator first and if the respone is regarding an ongoin converstainpn to gain more context intiated by agetns the respone is direclty routed to agetns insted of orchestrator
         #result = await builder_graph.ainvoke(state)
                 # First message, go to orchestrator
-        # if not state.get("uoc_pending_question", False):
+        # if not state.get("needs_clarification", False):
         #     result = await builder_graph.ainvoke(state)
         # The above flow has logic flaw becuase the followup question in set high by the uoc manager but this is interpreted as a frost time message and routed to orchestrated.
         
-        #if not state.get("uoc_last_called_by") and state.get("uoc_pending_question", False):
-        print("Webhook :::::: whatsapp_webhook:::::  UOC pending question:", state.get("uoc_pending_question", False))
+        #if not state.get("uoc_last_called_by") and state.get("needs_clarification", False):
+        print("Webhook :::::: whatsapp_webhook:::::  UOC pending question:", state.get("needs_clarification", False))
         print("Webhook :::::: whatsapp_webhook::::: UOC last called by:", state.get("uoc_last_called_by", "unknown"))
 
         # if  state.get("uoc_last_called_by") is None:  # checinkg it any agent called from uoc manager whic imokies it is a followup task 
@@ -249,7 +318,7 @@ async def whatsapp_webhook(request: Request):
             #save_state(sender_id, result)  # Save the updated state back to Redis
                  
         # Agent returned with UOC pending
-        #if state.get("uoc_pending_question", False):
+        #if state.get("needs_clarification", False):
         PROJECT_FORMATION_MESSAGES = [
     "Okay.",
     "Alright.",
@@ -301,13 +370,22 @@ async def whatsapp_webhook(request: Request):
     "Right, let’s set the ground.",
     "Perfect. Let’s walk through it step by step.", 
         ]
-
-
-        if  state.get("uoc_pending_question") is True:  # checking if the uoc manager is pending a question to be answered by the user
-            print("Webhook :::::: whatsapp_webhook::::: <uoc_pending_question>::::: -- Figuring out which method in UOC managet to call, after the question initasked by UOC manager --", state["uoc_pending_question"])
+        try:
+                async with AsyncSessionLocal() as session:
+                   crud = DatabaseCRUD(session)
+                   uoc_mgr = UOCManager(crud)
+                      
+                   #uoc_mgr = UOCManager()  # Instantiate the class
+        except Exception as e:
+                print("Webhook :::::: whatsapp_webhook::::: Error instantiating UOCManager:", e)
+                import traceback; traceback.print_exc()
+                return {"status": "error", "message": f"Failed to instantiate UOCManager: {e}"}
+       
+        if  state.get("needs_clarification") is True:  # checking if the uoc manager is pending a question to be answered by the user
+            print("Webhook :::::: whatsapp_webhook::::: <needs_clarification>::::: -- Figuring out which method in UOC managet to call, after the question initasked by UOC manager --", state["needs_clarification"])
             q_type = state.get("uoc_question_type", "").strip().lower()
             print("Webhook :::::: whatsapp_webhook::::: <uoc_question_type>::::: -- The set question type is --", repr(q_type))
-            uoc_mgr = UOCManager() #Instantiate the class
+            
             
             if q_type == "onboarding":
                     
@@ -318,34 +396,60 @@ async def whatsapp_webhook(request: Request):
             
             elif q_type == "project_formation":
                 whatsapp_output(sender_id, random.choice(PROJECT_FORMATION_MESSAGES), message_type="plain")
-                print("Webhook :::::: whatsapp_webhook::::: <uoc_pending_question True>::::: <uoc_question_type>::::: -- The set question type is project_formation so calling ??collect_project_structure_interactively??  --", state["uoc_question_type"])
+                print("Webhook :::::: whatsapp_webhook::::: <needs_clarification True>::::: <uoc_question_type>::::: -- The set question type is project_formation so calling ??collect_project_structure_interactively??  --", state["uoc_question_type"])
                 #print("State=====", state)
                 try:
                     followups_state = await uoc_mgr.collect_project_structure_interactively(state)
                 except Exception as e:
                     print("Webhook :::::: whatsapp_webhook::::: Error calling collect_project_structure_interactively:", e)
-                    import traceback; traceback.print_exc()
-            
-              
-          
-            elif q_type == "has_plan_or_doc":
-                whatsapp_output(sender_id, random.choice(PLAN_OR_DOC_MESSAGES), message_type="plain")
-                print("Webhook :::::: whatsapp_webhook::::: <uoc_pending_question True>::::: <uoc_question_type>::::: -- The set question type is has_plan_or_doc, so calling ??collect_plan_or_doc?? --", state["uoc_question_type"])
-                followups_state = await uoc_mgr.collect_project_structure_with_priority_sources(state)
+                    traceback.print_exc()
+                
 
- 
+            elif q_type == "has_plan_or_doc":
+                    file_url  = state.get("image_path") or state.get("file_local_path")
+                    file_type = state.get("msg_type")
+
+                    if file_url and file_type in ("image", "pdf", "document"):
+                        print("Webhook :::::: Detected plan upload —", file_type, file_url)
+                        try:
+                            followups_state = await uoc_mgr.process_plan_file(
+                                state, file_url, file_type
+                            )
+                        except Exception as e:
+                            print("Webhook :::::: process_plan_file failed:", e)
+                            followups_state = state
+                            followups_state.update(
+                                latest_respons=(
+                                    "Sorry, I couldn’t read that file. "
+                                    "Please try a clearer image or a PDF."
+                                ),
+                                needs_clarification=True,
+                            )
+                    else:
+                        whatsapp_output(
+                            sender_id,
+                            random.choice(PLAN_OR_DOC_MESSAGES),
+                            message_type="plain",
+                        )
+                        print("Webhook :::::: Awaiting plan upload — sending gentle nudge.")
+                        followups_state = await uoc_mgr.collect_project_structure_with_priority_sources(state)
             elif q_type == "project_selection":
                 whatsapp_output(sender_id, random.choice(PROJECT_SELECTION_MESSAGES), message_type="plain")
-                print("Webhook ::::::  whatsapp_webhook::::: <uoc_pending_question True>::::: <uoc_question_type>::::: -- The set question type is project_selection, so calling ??select_or_create_project??--", state["uoc_question_type"])
+                print("Webhook ::::::  whatsapp_webhook::::: <needs_clarification True>::::: <uoc_question_type>::::: -- The set question type is project_selection, so calling ??select_or_create_project??--", state["uoc_question_type"])
                 followups_state = await uoc_mgr.select_or_create_project(state, None)
             
             elif q_type == "siteops_welcome":
-                print("Webhook :::::: whatsapp_webhook::::: <uoc_pending_question True>::::: <uoc_question_type>::::: -- The set question type is siteops_welcome, so calling ??siteops_agent.new_user_flow?? --", state["uoc_question_type"])
+                print("Webhook :::::: whatsapp_webhook::::: <needs_clarification True>::::: <uoc_question_type>::::: -- The set question type is siteops_welcome, so calling ??siteops_agent.new_user_flow?? --", state["uoc_question_type"])
                 try:
-                    followups_state =  siteops_agent.new_user_flow(state)
+                    #followups_state = await siteops_agent.new_user_flow(state)
+                    #followups_state=await siteops_agent.run_siteops_agent(state)
+                    async with AsyncSessionLocal() as session:
+                       crud = DatabaseCRUD(session)
+                       followups_state = await siteops_agent.run_siteops_agent(state, config={"configurable": {"crud": crud}})
                 except Exception as e:
                     print("Webhook :::::: whatsapp_webhook::::: Error calling siteops_agent.new_user_flow:", e)
                     import traceback; traceback.print_exc()
+            
             
             else:
                 raise ValueError(f"Unknown uoc_question_type: {state['uoc_question_type']}")
@@ -353,8 +457,8 @@ async def whatsapp_webhook(request: Request):
         
                 #print("State after classify_and_respond=====", followups_state)
             
-            if followups_state.get("uoc_pending_question") is False and followups_state.get("uoc_confidence") in ["high"]:
-                print("Webhook :::::: whatsapp_webhook::::: <uoc_pending_question True>::::: <uoc_pending_question>::::: -- UOC is now confident, calling the agent --")
+            if followups_state.get("needs_clarification") is False and followups_state.get("uoc_confidence") in ["high"]:
+                print("Webhook :::::: whatsapp_webhook::::: <needs_clarification True>::::: <needs_clarification>::::: -- UOC is now confident, calling the agent --")
                 agent_name = followups_state.get("uoc_last_called_by", "uknown")
                 result = await run_agent_by_name(agent_name, state)
 
@@ -369,7 +473,7 @@ async def whatsapp_webhook(request: Request):
             whatsapp_output(sender_id, response_msg, message_type=message_type, extra_data=extra_data)
     
         # This is redundant because the uoc_confidence -> high state is handled in UOC manager and that state is sent to the agent directly. There wont be a response back to the user when the state is high. 
-        # elif  state.get("uoc_pending_question") is False and state.get("uoc_confidence") in ["High"]:
+        # elif  state.get("needs_clarification") is False and state.get("uoc_confidence") in ["High"]:
         #      # UOC is now confident, resume agent
         #     agent_name = state.get("uoc_last_called_by", "unknown")
         #     result = await run_agent_by_name(agent_name, state) 
@@ -378,13 +482,23 @@ async def whatsapp_webhook(request: Request):
 # No need to go back to orchestrator (builder_graph) — decision was made earlier.
 #The main question may arise from the lack of clairty of who owns the control flow and the return path?  - Which is now addressed by the above code.
              
-        elif state.get("uoc_pending_question") is False:
-            print("Webhook :::::: whatsapp_webhook::::: <uoc_pending_question False>:::::  -- Calling orchestrator, this is a first time message --")
-            #whatsapp_output(sender_id, random.choice(FIRST_TIME_MESSAGES), message_type="plain")
+        elif state.get("needs_clarification") is False:
+            print("Webhook :::::: whatsapp_webhook::::: <needs_clarification False>:::::  -- Calling orchestrator, this is a first time message --")
+            #whatsapp_output(sender_id, random.choice(FIRST_TI ME_MESSAGES), message_type="plain")
             state["user_full_name"] = user_name  # Update the user's full name in the state
-            result = await builder_graph.ainvoke(state)
+            #result = await builder_graph.ainvoke(state)
+            
+            print("Calling builder_graph:", builder_graph)
+            print("Type of builder_graph:", type(builder_graph))
+            #PassingDB Session as a context wrapper to Langgraph; dont send crud in a state, it break the serialization. 
+            async with AsyncSessionLocal() as session:
+             crud = DatabaseCRUD(session)
+             result = await builder_graph.ainvoke(input=state, config={"crud": crud})
+
+
+
             save_state(sender_id, result)
-            print("Webhook :::::: whatsapp_webhook::::: <uoc_pending_question False>:::::  -- Got result from the Orchestrator, saved the state : --", get_state(sender_id))
+            print("Webhook :::::: whatsapp_webhook::::: <needs_clarification False>:::::  -- Got result from the Orchestrator, saved the state : --", get_state(sender_id))
             # print("result after saving in condition ", result)
         # Send final reply
         #response_msg = state["latest_response"] if "latest_response" in state else "No response available."
