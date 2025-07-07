@@ -13,7 +13,7 @@ llm = ChatOpenAI(
     temperature=0,
     openai_api_key=os.getenv("OPENAI_API_KEY")  # safely pulls from env
 )   
-async def run_procurement_agent(state: dict) -> dict:
+async def run_procurement_agent(state: dict,  config: dict) -> dict:
     last_msg = state["messages"][-1]["content"]
     print("Procurement agent received:", last_msg)
 
@@ -21,7 +21,6 @@ async def run_procurement_agent(state: dict) -> dict:
 
     system_prompt = """
 A customer sent the following material request:
-
 
 Given the user's message, extract:
 - material → combine brand name and material type (e.g., "Deccan TMT"). ALso note that dimenions, sizer variotions can be present the saem SKU. So present the SKU with different dimensions as a single SKU. ) Ex: Deccan TMT 20mm, Vizag TMT 8mm etc
@@ -56,7 +55,7 @@ Respond ONLY in this JSON format:
     "query": extracted["material"],
     "quantity": extracted["quantity"]})
     matched_sku = match["matches"][0] if match["matches"] else "No match"
-
+ 
     # Step 3: Return formatted quote
     quote_msg = (
         f"🧾 Quote:\n"

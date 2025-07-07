@@ -1,0 +1,32 @@
+from typing import TypedDict, List, Optional
+
+
+class AgentState(TypedDict):
+    user_full_name: Optional[str]
+    user_stage: Optional[str]
+    insights: Optional[List[dict]]
+    messages: List[dict]
+    sender_id: str
+    intent: Optional[str]
+    image_path: Optional[str]
+    msg_type: Optional[str]
+    media_id: Optional[str]
+    caption: Optional[str]
+    agent_first_run: Optional[bool]
+    needs_clarification: Optional[bool]
+    random_question_type: Optional[str]
+    user_verified: Optional[bool]
+    uoc_question_type: Optional[str]
+    uoc_last_called_by: Optional[str]
+    uoc_confidence: Optional[str]
+    uoc: Optional[dict]
+    context: Optional[str]
+    uoc_next_message_type: Optional[str]
+    uoc_next_message_extra_data: Optional[List[dict]]    
+    latest_respons: Optional[str]
+    project_setup_mode: Optional[bool]    
+    project_structure: Optional[dict]     
+    fuzzy_project_suggestion:Optional[dict]
+    #poject_setup_done:Optional[bool]
+    active_project_id: Optional[str]         
+    siteops_conversation_log: Optional[List[dict]]
