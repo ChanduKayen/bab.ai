@@ -8,7 +8,7 @@ from managers.uoc_manager import UOCManager
 router = APIRouter()
 from app.logging_config import logger
 import requests
-import redis
+#import redis
 import asyncio  
 import random
 import json
@@ -19,7 +19,8 @@ from users.user_onboarding_manager import user_status
 from database._init_ import AsyncSessionLocal
 from database.uoc_crud import DatabaseCRUD
 from managers.uoc_manager import UOCManager
-
+from managers.project_intel import get_region_via_llm
+from managers.project_intel import TaskHandler
 
 load_dotenv(override=True)
 
@@ -374,7 +375,7 @@ async def whatsapp_webhook(request: Request):
                 async with AsyncSessionLocal() as session:
                    crud = DatabaseCRUD(session)
                    uoc_mgr = UOCManager(crud)
-                      
+                   task_handler = TaskHandler(crud)  # Initialize TaskHandler with the same CRUD instance
                    #uoc_mgr = UOCManager()  # Instantiate the class
         except Exception as e:
                 print("Webhook :::::: whatsapp_webhook::::: Error instantiating UOCManager:", e)
@@ -434,10 +435,21 @@ async def whatsapp_webhook(request: Request):
                         print("Webhook :::::: Awaiting plan upload — sending gentle nudge.")
                         followups_state = await uoc_mgr.collect_project_structure_with_priority_sources(state)
             elif q_type == "project_selection":
-                whatsapp_output(sender_id, random.choice(PROJECT_SELECTION_MESSAGES), message_type="plain")
-                print("Webhook ::::::  whatsapp_webhook::::: <needs_clarification True>::::: <uoc_question_type>::::: -- The set question type is project_selection, so calling ??select_or_create_project??--", state["uoc_question_type"])
-                followups_state = await uoc_mgr.select_or_create_project(state, None)
-            
+                # whatsapp_output(sender_id, random.choice(PROJECT_SELECTION_MESSAGES), message_type="plain")
+                # print("Webhook ::::::  whatsapp_webhook::::: <needs_clarification True>::::: <uoc_question_type>::::: -- The set question type is project_selection, so calling ??select_or_create_project??--", state["uoc_question_type"])
+                # followups_state = await uoc_mgr.select_or_create_project(state, None)
+                if msg.get("type") == "interactive" and msg["interactive"].get("type") == "button_reply":
+                    button_id = msg["interactive"]["button_reply"]["id"]
+                    button_title = msg["interactive"]["button_reply"]["title"]
+
+                    if button_id == "add_new":
+                        # Call your select_or_create_project flow
+                        followups_state = await uoc_mgr.select_or_create_project(state, None)
+                    else:
+                        followups_state = await task_handler.handle_job_update(state)
+            elif q_type == "task_region_identification":
+                followups_state = await get_region_via_llm(state)
+
             elif q_type == "siteops_welcome":
                 print("Webhook :::::: whatsapp_webhook::::: <needs_clarification True>::::: <uoc_question_type>::::: -- The set question type is siteops_welcome, so calling ??siteops_agent.new_user_flow?? --", state["uoc_question_type"])
                 try:
@@ -481,7 +493,7 @@ async def whatsapp_webhook(request: Request):
 # UOC is now confident, resume the originally intended agent.
 # No need to go back to orchestrator (builder_graph) — decision was made earlier.
 #The main question may arise from the lack of clairty of who owns the control flow and the return path?  - Which is now addressed by the above code.
-             
+           
         elif state.get("needs_clarification") is False:
             print("Webhook :::::: whatsapp_webhook::::: <needs_clarification False>:::::  -- Calling orchestrator, this is a first time message --")
             #whatsapp_output(sender_id, random.choice(FIRST_TI ME_MESSAGES), message_type="plain")
@@ -490,10 +502,10 @@ async def whatsapp_webhook(request: Request):
             
             print("Calling builder_graph:", builder_graph)
             print("Type of builder_graph:", type(builder_graph))
-            #PassingDB Session as a context wrapper to Langgraph; dont send crud in a state, it break the serialization. 
-            async with AsyncSessionLocal() as session:
-             crud = DatabaseCRUD(session)
-             result = await builder_graph.ainvoke(input=state, config={"crud": crud})
+            #PassingDB Session as a  contextwrapper to Langgraph; dont send crud in a state, it break the serialization. 
+            # async with AsyncSessionLocal() as session:
+            #  crud = DatabaseCRUD(session)
+            result = await builder_graph.ainvoke(input=state, config={"crud": crud})
 
 
 
