@@ -2,10 +2,10 @@
 from datetime import datetime, timedelta
 from typing import List, Dict, Optional
 import json
-import redis
+#import redis
 import sqlite3
 ONBOARDING_STAGES = ["new", "curious", "identified", "engaged", "trusted"]
-r = redis.Redis(host="localhost", port=6379, db=0, decode_responses=True)
+#r = redis.Redis(host="localhost", port=6379, db=0, decode_responses=True)
 
 USER_ACTION_SCORES = {
     "selected_identity": 2,

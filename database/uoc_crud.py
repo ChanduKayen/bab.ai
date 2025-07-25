@@ -2,17 +2,18 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy import select, update, delete
 from typing import Optional, List
-from database.models import Project, Flat, Region, WorkerLog, MaterialInventory, MaterialLog
+from database.models import Project, Flat, Region, WorkerLog, MaterialInventory, MaterialLog, Task
 from sqlalchemy.exc import SQLAlchemyError
 import logging
 from sqlalchemy.orm import declarative_base
 from datetime import datetime
+from uuid import UUID
+import uuid
 
 Base = declarative_base()
 
 def to_dict(model):
     return {c.key: getattr(model, c.key) for c in model.__table__.columns}
-
 
 class DatabaseCRUD:
     def __init__(self, session: AsyncSession):
@@ -94,24 +95,24 @@ class DatabaseCRUD:
             await self.session.rollback()
             logging.error(f"Error deleting project: {e}")
             raise
-    async def get_projects_by_sender(self, sender_id: str) -> List[dict]:
 
+    async def get_projects_by_sender(self, sender_id: str) -> List[dict]:
         try:
             stmt = select(Project).where(Project.sender_id == sender_id).order_by(Project.created_at.desc())
             result = await self.session.execute(stmt)
             projects = result.scalars().all()
 
             return [
-            {
-               "id": proj.id,
-                "title": proj.name,
-                "location": proj.location,
-                "no_of_blocks": proj.no_of_blocks,
-                "floors_per_block": proj.floors_per_block,
-                "flats_per_floor": proj.flats_per_floor,
-                "created_at": proj.created_at.isoformat() if proj.created_at else None
-            }
-            for proj in projects
+                {
+                    "id": proj.id,
+                    "title": proj.name,
+                    "location": proj.location,
+                    "no_of_blocks": proj.no_of_blocks,
+                    "floors_per_block": proj.floors_per_block,
+                    "flats_per_floor": proj.flats_per_floor,
+                    "created_at": proj.created_at.isoformat() if proj.created_at else None
+                }
+                for proj in projects
             ]
         except Exception as e:
             logging.error(f"Error fetching projects by sender: {e}")
@@ -169,30 +170,29 @@ class DatabaseCRUD:
             await self.session.rollback()
             logging.error(f"Error creating region: {e}")
             raise
-    
 
     async def upsert_region(self, region: dict) -> Region:
-         return await self.upsert(
-        model=Region,
-        index_elements=["full_id"],
-        update_fields={
-            "code": region["code"],
-            "project_id": region["project_id"],
-            "flat_id": region.get("flat_id"),
-            "block_name": region.get("block_name"),
-            "floor_no": region.get("floor_no"),
-            "meta": region.get("meta", {})
-        },
-        insert_fields={
-            "full_id": region["full_id"],
-            "code": region["code"],
-            "project_id": region["project_id"],
-            "flat_id": region.get("flat_id"),
-            "block_name": region.get("block_name"),
-            "floor_no": region.get("floor_no"),
-            "meta": region.get("meta", {})
-        }
-    )
+        return await self.upsert(
+            model=Region,
+            index_elements=["full_id"],
+            update_fields={
+                "code": region["code"],
+                "project_id": region["project_id"],
+                "flat_id": region.get("flat_id"),
+                "block_name": region.get("block_name"),
+                "floor_no": region.get("floor_no"),
+                "meta": region.get("meta", {})
+            },
+            insert_fields={
+                "full_id": region["full_id"],
+                "code": region["code"],
+                "project_id": region["project_id"],
+                "flat_id": region.get("flat_id"),
+                "block_name": region.get("block_name"),
+                "floor_no": region.get("floor_no"),
+                "meta": region.get("meta", {})
+            }
+        )
 
     async def get_regions_by_project(self, project_id: str) -> List[Region]:
         try:
@@ -202,149 +202,67 @@ class DatabaseCRUD:
         except Exception as e:
             logging.error(f"Error fetching regions: {e}")
             raise
- # ----------------- Flat -----------------
-    async def upsert_flat(self, flat_data: dict) -> dict:
-        stmt = pg_insert(Flat).values(**flat_data)
-        stmt = stmt.on_conflict_do_update(
-            index_elements=["project_id", "block_name", "floor_no", "flat_no"],
-            set_={
-                "bhk_type": stmt.excluded.bhk_type,
-                "facing": stmt.excluded.facing,
-                "carpet_sft": stmt.excluded.carpet_sft
-            }
-        ).returning(Flat)
-        result = await self.session.execute(stmt)
-        await self.session.commit()
-        return result.scalar().__dict__
-    
- # ----------------- Worker -----------------
 
-    async def create_worker_log(self, log: dict) -> WorkerLog:
+    # -------------------- Tasks --------------------
+    async def get_scopes_in_region(self, region_id: UUID) -> List[str]:
+        print(f"project_intel:::get_scopes_in_region::: --Fetching scopes for region {region_id} --")
         try:
-            db_log = WorkerLog(**log)
-            self.session.add(db_log)
+            stmt = select(Task.task_type).where(Task.region_id == region_id)
+            result = await self.session.execute(stmt)
+            scopes = result.scalars().all()
+            return scopes
+        except Exception as e:
+            print(f"Error fetching scopes for region {region_id}: {e}")
+            return []
+
+    async def get_task(self, region_id: UUID, scope: str) -> Optional[Task]:
+        print(f"project_intel:::get_task::: --Fetching task for region {region_id} and scope '{scope}' --")
+        try:
+            stmt = select(Task).where(
+                Task.region_id == region_id,
+                Task.task_type == scope
+            )
+            result = await self.session.execute(stmt)
+            return result.scalar_one_or_none()
+        except Exception as e:
+            print(f"Error fetching task for region {region_id} and scope '{scope}': {e}")
+            return None
+
+    async def create_task(self, project_id, region_id, scope) -> Optional[Task]:
+        print(f"project_intel:::create_task::: --Creating task for region {region_id} and scope '{scope}' --")
+        try:
+            task = Task(
+                id=uuid.uuid4(),
+                project_id=project_id,
+                region_id=region_id,
+                task_type=scope,
+                status="Not Started",
+                created_at=datetime.utcnow()
+            )
+            self.session.add(task)
             await self.session.commit()
-            await self.session.refresh(db_log)
-            return db_log
+            await self.session.refresh(task)
+            return task
         except Exception as e:
             await self.session.rollback()
-            logging.error(f"Error creating worker log: {e}")
-            raise
+            print(f"Error creating task for region {region_id} and scope '{scope}': {e}")
+            return None
 
+    async def get_or_create_task(self, region_id: UUID, scope: str) -> Optional[Task]:
+        print(f"project_intel:::get_or_create_task::: --Getting or creating task for region {region_id} and scope '{scope}' --")
+        task = await self.get_task(region_id, scope)
+        return task if task else await self.create_task(region_id, region_id, scope)
 
-async def get_worker_logs_by_project(self, project_id: str) -> List[WorkerLog]:
-    try:
-        stmt = select(WorkerLog).where(WorkerLog.project_id == project_id)
-        result = await self.session.execute(stmt)
-        return list(result.scalars().all())
-    except Exception as e:
-        logging.error(f"Error fetching worker logs: {e}")
-        raise
+    async def get_task_summary(self):
+        print("project_intel:::get_task_summary::: --Fetching task summary --")
+        return []  # implement as needed
 
- # ----------------- Inventory -----------------
-async def create_material_inventory(self, inventory: dict) -> MaterialInventory:
-    try:
-        db_inventory = MaterialInventory(**inventory)
-        self.session.add(db_inventory)
-        await self.session.commit()
-        await self.session.refresh(db_inventory)
-        return db_inventory
-    except Exception as e:
-        await self.session.rollback()
-        logging.error(f"Error creating material inventory: {e}")
-        raise
-
-async def update_material_quantity(self, inventory_id: str, quantity: int) -> Optional[MaterialInventory]:
-    try:
-        stmt = (
-            update(MaterialInventory)
-            .where(MaterialInventory.id == inventory_id)
-            .values(quantity=quantity, updated_at=datetime.utcnow())
-            .returning(MaterialInventory)
-        )
-        result = await self.session.execute(stmt)
-        await self.session.commit()
-        return result.scalar_one_or_none()
-    except Exception as e:
-        await self.session.rollback()
-        logging.error(f"Error updating material quantity: {e}")
-        raise
-
-async def upsert_material_inventory(self, inventory_data: dict) -> MaterialInventory:
-    try:
-        stmt = pg_insert(MaterialInventory).values(**inventory_data)
-        stmt = stmt.on_conflict_do_update(
-            index_elements=["project_id", "name", "specification", "unit"],
-            set_={
-                "quantity": stmt.excluded.quantity,
-                "updated_at": datetime.utcnow()
-            }
-        ).returning(MaterialInventory)
-        result = await self.session.execute(stmt)
-        await self.session.commit()
-        return result.scalar_one()
-    except Exception as e:
-        await self.session.rollback()
-        logging.error(f"Upsert error for material inventory: {e}")
-        raise
-
-async def get_material_inventory_by_project(self, project_id: str) -> List[MaterialInventory]:
-    try:
-        stmt = select(MaterialInventory).where(MaterialInventory.project_id == project_id)
-        result = await self.session.execute(stmt)
-        return list(result.scalars().all())
-    except Exception as e:
-        logging.error(f"Error fetching material inventory: {e}")
-        raise
-
- # ----------------- Material log -----------------
-async def create_material_log(self, log: dict) -> MaterialLog:
-    try:
-        db_log = MaterialLog(**log)
-        self.session.add(db_log)
-        await self.session.commit()
-        await self.session.refresh(db_log)
-        return db_log
-    except Exception as e:
-        await self.session.rollback()
-        logging.error(f"Error creating material log: {e}")
-        raise
-
-async def get_material_logs_by_inventory(self, inventory_id: str) -> List[MaterialLog]:
-    try:
-        stmt = select(MaterialLog).where(MaterialLog.inventory_id == inventory_id)
-        result = await self.session.execute(stmt)
-        return list(result.scalars().all())
-    except Exception as e:
-        logging.error(f"Error fetching material logs: {e}")
-        raise
-
-async def create_material_log_and_update_inventory(self, log_data: dict) -> MaterialLog:
-    try:
-        # Create material log
-        log = MaterialLog(**log_data)
-        self.session.add(log)
-
-        # Adjust inventory quantity
-        inventory_id = log_data["inventory_id"]
-        quantity_change = log_data["quantity"]
-        change_type = log_data["change_type"]
-
-        current_inventory = await self.session.get(MaterialInventory, inventory_id)
-        if not current_inventory:
-            raise ValueError("Inventory not found")
-
-        if change_type == "Usage" or change_type == "Wastage":
-            current_inventory.quantity -= abs(quantity_change)
-        elif change_type == "Refill":
-            current_inventory.quantity += abs(quantity_change)
-
-        current_inventory.updated_at = datetime.utcnow()
-        await self.session.commit()
-        await self.session.refresh(log)
-        return log
-
-    except Exception as e:
-        await self.session.rollback()
-        logging.error(f"Error creating material log and updating inventory: {e}")
-        raise
+    async def get_region_full_ids_by_project(self, project_id: UUID) -> List[str]:
+        print(f"project_intel:::get_region_full_ids_by_project::: --Fetching region full IDs for project {project_id} --")
+        try:
+            stmt = select(Region.full_id).where(Region.project_id == project_id)
+            result = await self.session.execute(stmt)
+            return result.scalars().all()
+        except Exception as e:
+            print(f"Error fetching regions for project {project_id}: {e}")
+            return []

@@ -163,7 +163,7 @@ class UOCManager:
         user_message = (
             state.get("messages", [])[-1].get("content", "").strip().lower()
             if state.get("messages") else "")
-
+        
     # 1. If user is responding to a fuzzy match confirmation
         if state.get("needs_clarification") and "fuzzy_project_suggestion" in state:
             print("UOC Manager:::::: select_or_create_project:::::  -- Confirming yes or no   --", possible_project_name)
@@ -234,7 +234,6 @@ class UOCManager:
     for project in user_projects
 ]
             state["uoc_next_message_extra_data"] = project_titles + [{"id": "add_new", "title": "➕ Add New Project"}]
-            state["uoc_question_type"] = "project_updation"
             print("UOC Manager:::::: select_or_create_project:::::  -- No fuzzy match or possible name, showing project list --", state["uoc_next_message_extra_data"])
             return state
 
@@ -536,7 +535,7 @@ OUTPUT RULES
             return await self.collect_project_structure_interactively(state)
         except Exception as e:
             print("UOC Manager:::::: process_plan_file:::::: -- Error with GPT-4o vision processing:", str(e))
-            state["latest_respons"] = "⚠️ Sorry, I couldn’t read your plan correctly. Please try with a clearer version."
+            state["latest_respons"] = "Sorry, I couldn’t read your plan correctly. Please try with a clearer version."
             state["needs_clarification"] = True
             return state
         
