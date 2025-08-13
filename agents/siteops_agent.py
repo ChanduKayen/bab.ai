@@ -42,10 +42,10 @@ _JSON_PATTERN = re.compile(r"\{.*\}", re.S)
 def safe_json(text: str, default=None):
     """
     Try hard to get JSON out of an LLM block.
-    - Strips ```json fences
+    - Strips json fences
     - Tries a raw json.loads
     - Fallback: regex find first {...}
-    - On failure returns `default` (dict() if not supplied)
+    - On failure returns default (dict() if not supplied)
     """
     txt = text.strip()
     if txt.startswith("```"):
@@ -85,7 +85,7 @@ INPUT
 • Optionally → one photo of the same location.
 
 OUTPUT  
-Return **ONE single-line JSON object** and nothing else.  
+Return *ONE single-line JSON object* and nothing else.  
 Keys (always include all four; use null if unknown):
 
 {
@@ -94,7 +94,7 @@ Keys (always include all four; use null if unknown):
   "risk": "<string|null>",          // main immediate risk 
   "summary": "<string>"              // 💬 WhatsApp-style crisp sentence:
                                      //  - Warm, human and direct to the builder
-                                     //  - Includes ONE apt emoji (⚠️ ✅ 👀 👍 🛠️ …)
+                                     //  - Includes ONE apt emoji (⚠ ✅ 👀 👍 🛠 …)
                                      //  - Names the next likely action or caution (use practical logic)
                                      //  - ≤ 120 characters
 }
@@ -103,11 +103,11 @@ RULES
 1. Never wrap the JSON in markdown fences or add commentary.  
 2. Keep “highlight” ≤ 110 chars so it’s readable on mobile.  
 3. If there is clearly no construction content, set every field to null **except
-   “summary”**; in that case summary should politely say you found nothing
+   “summary”; in that case summary should politely say you found nothing
    relevant.  
 4. When a photo is present, combine what you see with the text.  
 5. Avoid brand names; keep it generic.
-*Very important rule* - 
+Very important rule - 
 Borrow clarity from these optional dimensions if they help you write better:
    - execution_quality (e.g. neat joints, sagging lines)
    - construction_method (e.g. two-coat plaster, English bond)
@@ -117,10 +117,10 @@ Borrow clarity from these optional dimensions if they help you write better:
    - next_likely_step (e.g. allow curing, begin shuttering)
 
 EXAMPLE  
-**User text:**  
+*User text:*  
 “Two masons are applying the first coat of waterproofing in the master bathroom.”  
 
-**Expected model reply (single line):**  
+*Expected model reply (single line):*  
 {"component":"Bathroom Waterproofing","highlight":"Two masons are applying the first coat of membrane.","risk":"Ensure full curing before tiling to prevent leaks.","summary":"
 👍 Waterproofing first coat under way—remind the team to allow full curing time."}"""
 
@@ -252,13 +252,13 @@ def get_context_and_tags(state: dict) -> Tuple[str, str]:
         try:
             img_b64 = encode_image_base64(img_path)
         except FileNotFoundError:
-            print("⚠️  Image file not found:", img_path)
+            print("⚠  Image file not found:", img_path)
 
     # ----------- summarise (safe) -----------
     try:
         note = summarise_update(combined, img_b64) or {}
     except Exception as e:
-        print("⚠️  summarise_update failed:", e)
+        print("⚠  summarise_update failed:", e)
         note = {}
 
     # Mandatory keys with defaults
@@ -270,7 +270,7 @@ def get_context_and_tags(state: dict) -> Tuple[str, str]:
         "Sorry, I couldn’t grasp that update. Could you re-phrase?"
     )
 
-    # store quick-grasp **string** for WhatsApp reply
+    # store quick-grasp *string* for WhatsApp reply
     state["siteops_quick_grasp"] = note["summary"]
     print("SiteOps Agent:::: get_context_and_tags : summary:", note["summary"])
     # ----------- vector tags (safe) -----------
@@ -279,7 +279,7 @@ def get_context_and_tags(state: dict) -> Tuple[str, str]:
     #     raw_tags   = vector_search(query) if query else []
     #     tags_pretty = filter_tags(raw_tags)
     # except Exception as e:
-    #     print("⚠️  vector_search failed:", e)
+    #     print("⚠  vector_search failed:", e)
     #     tags_pretty = ""
 
     # # ----------- human context block -----------
@@ -322,6 +322,20 @@ async def handle_siteops(state: AgentState, crud: DatabaseCRUD,latest_response: 
     print("Siteops Agent::::: handle_siteops:::::  --Handling siteops intent --", state)
     return state    
 
+async def handle_procurement(state: AgentState, crud: DatabaseCRUD,latest_response: str, uoc_next_message_extra_data=None ) -> AgentState:
+    #handle a message here 
+    state.update(
+        intent="procurement",
+        latest_respons=latest_response, 
+        uoc_next_message_type="button",
+        uoc_question_type="procurement_welcome",
+        needs_clarification=True,  
+        uoc_next_message_extra_data=[uoc_next_message_extra_data],
+        agent_first_run=True
+    )
+    print("Siteops Agent::::: handle_siteops:::::  --Handling procurement intent --", state)
+    return state    
+
 def handle_main_menu(state: AgentState, crud: DatabaseCRUD, latest_response: str, uoc_next_message_extra_data=None) -> AgentState:
     state.update(
         intent="random",
@@ -344,23 +358,23 @@ async def handle_micro_lesson(state:AgentState, crud: DatabaseCRUD, latest_respo
     topic = topic_to_be_covered if topic_to_be_covered else "Construction Basics"
     user_lang = 'Telugu'
     micro_lesson_prompt = f"""
-You are a master builder-mentor. Explain **{topic}** so that even a curious
+You are a master builder-mentor. Explain *{topic}* so that even a curious
 20-year-old helper and a seasoned contractor both say “aha!”.
 
 RULES OF ENGAGEMENT
 ===================
-1️⃣  Search credible sources (IS/ASTM, field handbooks, failure reports,
+⿡  Search credible sources (IS/ASTM, field handbooks, failure reports,
     expert YouTube demos, high-quality threads). Quote numbers ONLY if verifiable.
 
-2️⃣  Deliver **exactly 6 bullets** – each ≤ 140 chars.
+⿢  Deliver *exactly 6 bullets* – each ≤ 140 chars.
     • Bullets 1-3  = BASICS (what, why, 1 everyday detail + 1 common slip-up).
     • Bullets 4-6  = ADVANCED (killer fact / failure story / code clause /
-                      pro hack / cost metric). End with **[TRY]** or **[CHECK]**
+                      pro hack / cost metric). End with *[TRY]* or *[CHECK]*
                       action tag the reader can do next shift.
 
-3️⃣  ✨ Use 1 “wow” emoji max (⚠️, 💡, 🔍, 🚧, 🔑). No other fluff.
+⿣  ✨ Use 1 “wow” emoji max (⚠, 💡, 🔍, 🚧, 🔑). No other fluff.
 
-4️⃣  No headings, no markdown, no numbering – just six crisp lines.
+⿤  No headings, no markdown, no numbering – just six crisp lines.
 
 DON’TS
 ======
@@ -401,7 +415,7 @@ async def handle_project_onboarding(state:AgentState,  crud: DatabaseCRUD, lates
 
 _HANDLER_MAP = {
       "siteops": handle_siteops,
-    #"procurement": handle_procurement,
+    "procurement": handle_procurement,
     #"credit": handle_credit,
     "main_menu": handle_main_menu,
     "micro_lesson": handle_micro_lesson,
@@ -432,7 +446,7 @@ async def new_user_flow(state: AgentState,latest_msg_intent:str, crud: DatabaseC
         try:
             img_b64 = encode_image_base64(img_path)
         except FileNotFoundError:
-          print("⚠️  Image file not found:", img_path)
+          print("⚠  Image file not found:", img_path)
           print("SiteOps Agent:::: run_siteops_agent : called")
           state["siteops_conversation_log"].append({
     "role": "user", "content": img_b64 if img_b64 else last_msg + "\n" + state.get("caption", "")
@@ -452,7 +466,7 @@ async def new_user_flow(state: AgentState,latest_msg_intent:str, crud: DatabaseC
             state["agent_first_run"] = False
             state["user_verified"] = True
             state["uoc_next_message_extra_data"] = [
-                {"id": "siteops", "title": "🏗️Start with my site"},
+                {"id": "siteops", "title": "🏗Start with my site"},
                 {"id": "procurement", "title": "⚡ Get Quotes"}, 
                 {"id": "credit", "title": "💳 Credit Options"},
             ]
@@ -463,10 +477,10 @@ async def new_user_flow(state: AgentState,latest_msg_intent:str, crud: DatabaseC
             caption = state.get("caption", "")
             if img_b64:
                 whatsapp_output(
-    sender_id,
-    f"Hey 👋\n\nGot your photo. Give me a sec — scanning this carefully. 🔍",
-    message_type="plain",
-)
+                    sender_id,
+                    f"Hey 👋\n\nGot your photo. Give me a sec — scanning this carefully. 🔍",
+                    message_type="plain",
+                )
                 combined = caption if caption else ""
             else:
                 combined = last_msg
@@ -488,10 +502,10 @@ async def new_user_flow(state: AgentState,latest_msg_intent:str, crud: DatabaseC
             state["agent_first_run"] = False
             state["user_verified"] = True
             state["uoc_next_message_extra_data"] = [
-    #{"id": "micro_lesson", "title": "ℹ️ Learn More"}, 
-    {"id": "project_onboarding", "title": "📁 Add to Project"},
-    {"id": "main_menu", "title": "🏠 Main Menu"}
-]
+                #{"id": "micro_lesson", "title": "ℹ Learn More"}, 
+                {"id": "project_onboarding", "title": "📁 Add to Project"},
+                {"id": "main_menu", "title": "🏠 Main Menu"}
+            ]
             print("SiteOps Agent:::: run_siteops_agent : latest_response is set", state)
             return state
     #This becomes true from second message onwards.
@@ -501,7 +515,7 @@ async def new_user_flow(state: AgentState,latest_msg_intent:str, crud: DatabaseC
             #The main menu for new user.
             if last_msg =="main_menu":
                 latest_response = "Welcome back! How can I assist you today?"
-                uoc_next_message_extra_data =[{"id": "siteops", "title": "🏗️ Manage My Site"},
+                uoc_next_message_extra_data =[{"id": "siteops", "title": "🏗 Manage My Site"},
                                           {"id": "procurement", "title": "⚡ Get Quick Quotes"},
                                           {"id": "credit",      "title": "💳 Get Credit Now"}] 
             return await _HANDLER_MAP[last_msg](state, crud, latest_response, uoc_next_message_extra_data)
@@ -509,14 +523,14 @@ async def new_user_flow(state: AgentState,latest_msg_intent:str, crud: DatabaseC
             print("SiteOps Agent:::: new_user_flow:::: Button is note selected")
             if latest_msg_intent == "random":
                 from agents.random_agent import classify_and_respond
-                return await classify_and_respond(state)
+                return await classify_and_respond(state, config={"configurable": {"crud": crud}})
             elif latest_msg_intent == "siteops":
                 latest_response = "📷 Ready to check your site? Let's continue!"
                 uoc_next_message_extra_data = {"id": "siteops", "title": "📁 Continue Site Setup"}
-                return await handle_siteops(state, latest_response, uoc_next_message_extra_data)
-            # elif latest_msg_intent == "procurement":
-            #     latest_response = "🧱 Tell me what materials you're looking for, and I'll fetch quotes!"
-            #     return await handle_procurement(state, latest_response)
+                return await handle_siteops(state, crud, latest_response,  uoc_next_message_extra_data)
+            elif latest_msg_intent == "procurement":
+                latest_response = "🧱 Tell me what materials you're looking for, and I'll fetch quotes!"
+                return await handle_procurement(state, crud, latest_response)
             # elif latest_msg_intent == "credit":
             #     latest_response = "💳 Let's explore credit options suitable for your site."
             #     return await handle_credit(state, latest_response)
@@ -529,7 +543,7 @@ async def new_user_flow(state: AgentState,latest_msg_intent:str, crud: DatabaseC
                 state["uoc_question_type"] = "main_menu"
                 state["needs_clarification"] = True
                 state["uoc_next_message_extra_data"] = [
-                    {"id": "siteops", "title": "🏗️ Manage My Site"},
+                    {"id": "siteops", "title": "🏗 Manage My Site"},
                     {"id": "procurement", "title": "⚡ Get Quick Quotes"},
                     {"id": "credit", "title": "💳 Get Credit Now"}
                 ]
@@ -600,4 +614,3 @@ async def run_siteops_agent(state: AgentState, config: dict) -> AgentState:
 
     state["agent_first_run"] = False
     return state
-

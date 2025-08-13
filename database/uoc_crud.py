@@ -204,19 +204,30 @@ class DatabaseCRUD:
             raise
 
     # -------------------- Tasks --------------------
-    async def get_scopes_in_region(self, region_id: UUID) -> List[str]:
-        print(f"project_intel:::get_scopes_in_region::: --Fetching scopes for region {region_id} --")
+    async def get_scopes_in_region(self, region_full_id: str) -> List[str]:
+        print(f"uoc_crud:::get_scopes_in_region::: --Fetching scopes for region full_id {region_full_id} --")
         try:
+            # First, get the region UUID from the full_id
+
+            region_query = select(Region.id).where(Region.full_id == (region_full_id).strip())
+            region_result = await self.session.execute(region_query)
+            region_id = region_result.all()
+            region_id = region_id[0][0] if region_id else None
+            print(f"uoc_crud:::get_scopes_in_region::: --Region ID found: {region_id} -- with the complete result {region_result} --")
+            if not region_id:
+                print(f"uoc_crud:::No region found with full_id {region_full_id}")
+                return []
+            # Now, fetch scopes from Task using the region UUID
             stmt = select(Task.task_type).where(Task.region_id == region_id)
             result = await self.session.execute(stmt)
             scopes = result.scalars().all()
             return scopes
         except Exception as e:
-            print(f"Error fetching scopes for region {region_id}: {e}")
+            print(f"uoc_crud:::Error fetching scopes for region full_id {region_full_id}: {e}")
             return []
 
     async def get_task(self, region_id: UUID, scope: str) -> Optional[Task]:
-        print(f"project_intel:::get_task::: --Fetching task for region {region_id} and scope '{scope}' --")
+        print(f"uoc_crud:::get_task::: --Fetching task for region {region_id} and scope '{scope}' --")
         try:
             stmt = select(Task).where(
                 Task.region_id == region_id,
@@ -228,12 +239,18 @@ class DatabaseCRUD:
             print(f"Error fetching task for region {region_id} and scope '{scope}': {e}")
             return None
 
-    async def create_task(self, project_id, region_id, scope) -> Optional[Task]:
-        print(f"project_intel:::create_task::: --Creating task for region {region_id} and scope '{scope}' --")
+    async def create_task(self, project_id, region_full_id: str, scope) -> Optional[Task]:
+
+        print(f"uoc_crud:::create_task::: --Creating task for region {region_full_id} and scope '{scope}' --")
+        region_query = select(Region.id).where(Region.full_id == (region_full_id).strip())
+        region_result = await self.session.execute(region_query)
+        region_id = region_result.all()           
+        region_id = region_id[0][0] if region_id else None
+        print(f"uoc_crud:::create_task::: --Region ID found: {region_id} ")
         try:
             task = Task(
                 id=uuid.uuid4(),
-                project_id=project_id,
+                project_id=project_id, 
                 region_id=region_id,
                 task_type=scope,
                 status="Not Started",
@@ -242,6 +259,7 @@ class DatabaseCRUD:
             self.session.add(task)
             await self.session.commit()
             await self.session.refresh(task)
+            print(f"uoc_crud:::create_task::: --Task created: {task.__dict__} --")
             return task
         except Exception as e:
             await self.session.rollback()
@@ -249,20 +267,22 @@ class DatabaseCRUD:
             return None
 
     async def get_or_create_task(self, region_id: UUID, scope: str) -> Optional[Task]:
-        print(f"project_intel:::get_or_create_task::: --Getting or creating task for region {region_id} and scope '{scope}' --")
+        print(f"uoc_crud:::get_or_create_task::: --Getting or creating task for region {region_id} and scope '{scope}' --")
         task = await self.get_task(region_id, scope)
         return task if task else await self.create_task(region_id, region_id, scope)
-
+ 
     async def get_task_summary(self):
-        print("project_intel:::get_task_summary::: --Fetching task summary --")
+        print("uoc_crud:::get_task_summary::: --Fetching task summary --")
         return []  # implement as needed
 
     async def get_region_full_ids_by_project(self, project_id: UUID) -> List[str]:
-        print(f"project_intel:::get_region_full_ids_by_project::: --Fetching region full IDs for project {project_id} --")
+        print(f"uoc_crud::::::get_region_full_ids_by_project::: --Fetching region full IDs for project {project_id} --")
         try:
             stmt = select(Region.full_id).where(Region.project_id == project_id)
             result = await self.session.execute(stmt)
             return result.scalars().all()
         except Exception as e:
-            print(f"Error fetching regions for project {project_id}: {e}")
+            print(f"uoc_crud:::Error fetching regions for project {project_id}: {e}")
             return []
+
+
