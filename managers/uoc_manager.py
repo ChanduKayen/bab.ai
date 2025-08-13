@@ -603,14 +603,14 @@ OUTPUT RULES
               "uoc_confidence": "low",      // 'high' only when structure is complete
               "uoc_question_type": "project_formation"
             }
-
+    
             RULES:
-            - Never wrap the JSON in markdown.
+            - Never wrap the JSON in markdown. 
             - Return ONLY the JSON. No markdown, no extra text.
             """
         )
 
-        # ------------------------------------------------------------------
+        # ------------------------------------------------------- -----------
         # BUILD LLM MESSAGE HISTORY
         # ------------------------------------------------------------------
 
@@ -842,19 +842,19 @@ OUTPUT RULES
         for block in ps["blocks"]:
              block_name = block["block_name"]
 
-             for floor in range(1, block["no_of_floors"] + 1):
-                  for idx, flat in enumerate(block.get("flats", []), start=1):
-                       flat_no = floor * 100 + idx
-                       flat_data = {
-                "project_id": ps["id"],
-                "block_name": block_name,
-                "floor_no": floor,
-                "flat_no": flat_no,
-                "bhk_type": flat["type"],
-                "facing": flat.get("facing"),
-                "carpet_sft": flat.get("carpet_area")
-            }
-                       await self.crud.upsert_flat(flat_data)
+            #  for floor in range(1, block["no_of_floors"] + 1):
+            #       for idx, flat in enumerate(block.get("flats", []), start=1):
+            #            flat_no = floor * 100 + idx
+            #            flat_data = {
+            #     "project_id": ps["id"],
+            #     "block_name": block_name,
+            #     "floor_no": floor,
+            #     "flat_no": flat_no,
+            #     "bhk_type": flat["type"],
+            #     "facing": flat.get("facing"),
+            #     "carpet_sft": flat.get("carpet_area")
+            # }
+            #       await self.crud.upsert_flat(flat_data)
              region_list = await self.map_region_ids(ps)
              for region in region_list:
                    for region_id in region["region_ids"]:  
