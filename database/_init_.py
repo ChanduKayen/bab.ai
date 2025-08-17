@@ -7,7 +7,7 @@ import os
 load_dotenv()
 DATABASE_URL = os.getenv("DATABASE_URL")
 
-#DATABASE_URL = "postgresql+asyncpg://babai_admin:Babai@2025@localhost/babai"
+#DATABASE_URL = "postgresql+asyncpgpostgresql+asyncpg://babai_admin:Babai@2025@localhost/babai"
 
 engine = create_async_engine(DATABASE_URL, echo=True, pool_size=10, max_overflow=20)
 AsyncSessionLocal = async_sessionmaker(engine, expire_on_commit=False)

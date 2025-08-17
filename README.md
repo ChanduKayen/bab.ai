@@ -54,7 +54,7 @@ It is a **WhatsApp-first platform** that seamlessly connects **Procurement**, **
 
 1. Clone the repository (use SSH for secure access): `git clone git@github.com:your-org/bab.ai.git` `cd bab.ai`
 2. Set up virtual environment: `python -m venv .venv`
-3. Activation of virtual environment: `.venv\Scripts\activate`
+3. Activation of virtual environment: `.venv/Scripts/activate`
 4. Install dependencies: `pip install -r requirements.txt`
 5. Edit .env with your configuration.
     - `DATABASE_URL`: Postgresql connection string
