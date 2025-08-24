@@ -3,13 +3,16 @@ from whatsapp.webhook import router as whatsapp_router
 from whatsapp.apis import router as apis
 from app.logging_config import logger
 from fastapi.middleware.cors import CORSMiddleware
-
-app = FastAPI()
+from .config import Settings
+from .routers import items
+settings = Settings()
+app = FastAPI(title=settings.APP_NAME)
 
 logger.info(" main.py loaded")
 
 app.include_router(whatsapp_router, prefix="/whatsapp")
 app.include_router(apis)
+app.include_router(items.router)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],  # Or specify: ["http://localhost:3000"]
@@ -26,7 +29,13 @@ def read_root():
 def show_routes():  
     return [route.path for route in app.routes]
 
+@app.get("/health")
+def health():
+    return {"ok": True, "stage": settings.STAGE}
+
+
+app.include_router(items.router)
 
 for route in app.routes:
     print(" Registered route:", route.path)
-    logger.info(f" Registered route: {route.path}")
+    logger.info(f" Registered route: {route.path}")

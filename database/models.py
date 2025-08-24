@@ -1,8 +1,8 @@
 # db/models.py
 from datetime import datetime, date
 from sqlalchemy import (
-    ARRAY, Boolean, Column, String, Text, Integer, BigInteger, ForeignKey, Date,
-    Enum, JSON, text, DateTime, UniqueConstraint, Float)
+    ARRAY, Boolean, Column, String, Text, Integer, BigInteger, ForeignKey, Date, 
+    Index, Enum, JSON, text, DateTime, UniqueConstraint, Float)
 from sqlalchemy.orm import DeclarativeBase, Mapped, relationship, declarative_base
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.schema import MetaData
@@ -11,9 +11,7 @@ import uuid
 
 
 class Base(DeclarativeBase):
-    pass
-
-Base = declarative_base(metadata=MetaData(schema="public"))
+    metadata = MetaData(schema="public")
 # ---------- hierarchy -----------------------------------------------------
 class Project(Base):
     __tablename__ = "projects"
@@ -27,7 +25,12 @@ class Project(Base):
     flats_per_floor = Column(Integer, nullable=True)
 
     created_at = Column(DateTime, default=datetime.utcnow)
-
+    material_requests = relationship(
+        "MaterialRequest",
+        back_populates="project",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
 
 class Flat(Base):
     __tablename__ = "flats"
@@ -167,13 +170,14 @@ class RequestStatus(PyEnum):
     DRAFT = "draft"
     REQUESTED = "requested"
     QUOTED = "quoted"
-    APPROVED = "approved"
+    APPROVED = "approved" 
 
 class MaterialRequest(Base):
     __tablename__ = "material_requests"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"))
+    project_id = Column(UUID(as_uuid=True), ForeignKey("public.projects.id", ondelete="SET NULL"), nullable=True)
+    
     sender_id = Column(String, nullable=False)  # WhatsApp user ID
     status = Column(Enum(RequestStatus), default=RequestStatus.DRAFT, nullable=False)  # draft / requested / quoted / approved
     delivery_location = Column(String, nullable=True)
@@ -183,7 +187,19 @@ class MaterialRequest(Base):
     expected_delivery_date = Column(Date, nullable=True)
     user_editable = Column(Boolean, default=True)
     
-    items = relationship("MaterialRequestItem", back_populates="request", cascade="all, delete-orphan")
+    items = relationship(
+        "MaterialRequestItem",
+        back_populates="request",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
+    project = relationship("Project", back_populates="material_requests")
+    vendor_quote_items = relationship(
+        "VendorQuoteItem",
+        back_populates="request",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
 
 class MaterialRequestItem(Base):
     __tablename__ = "material_request_items"
@@ -202,6 +218,15 @@ class MaterialRequestItem(Base):
      
     request = relationship("MaterialRequest", back_populates="items")
     
+    vendor_quote_items = relationship(
+        "VendorQuoteItem",
+        back_populates="material_request_item",
+        cascade="all, delete-orphan", 
+        passive_deletes=True,
+    )
+    __table_args__ = (
+        Index("ix_mri_request_id", "material_request_id"),
+    )
 class MaterialCategory(PyEnum):
     SITE_PREPARATION = "Site Preparation & Earthwork"
     SAND_GRAVEL = "Sand & Gravel"
@@ -252,6 +277,12 @@ class Vendor(Base):
     active = Column(Boolean, default=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    vendor_quote_items = relationship(
+        "VendorQuoteItem",
+        back_populates="vendor",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
     
 class UserCategory(PyEnum):
     USER = "USER"
@@ -265,15 +296,15 @@ class UserCategory(PyEnum):
 class UserStage(PyEnum):
     NEW = "new"
     CURIOUS = "curious"
-    IDENTIFIED = "identified"
+    IDENTIFIED = "identified" 
     ENGAGED = "engaged"
     TRUSTED = "trusted"
 
 class User(Base):
     __tablename__ = "users"
-
-    sender_id = Column(String, primary_key=True)
-    user_full_name = Column(String, nullable=False)
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    sender_id = Column(String, unique=True, index=True, nullable=False)
+    user_full_name = Column(String, nullable=False) 
     user_category = Column(Enum(UserCategory), default=UserCategory.USER)  # USER / SUPERVISOR / ADMIN
     user_stage = Column(Enum(UserStage), default=UserStage.NEW)  # new / onboarding / active / inactive
     user_identity = Column(String, nullable=True)  # e.g., phone number, email
@@ -281,8 +312,9 @@ class User(Base):
     user_actions = Column(ARRAY(String), default=list)  # e.g., ["asked_for_material_quote", "used_credit_feature"]
     last_action_ts = Column(DateTime, default=datetime.utcnow)
     user_score = Column(Integer, default=0)
-
-    _table_args_ = (UniqueConstraint('sender_id', name='uq_user_sender_id'),)
+    
+    credit_profile = relationship("CreditProfile", back_populates="user", uselist=False)
+    __table_args__ = (UniqueConstraint('sender_id', name='uq_user_sender_id'),)
 class QuoteRequestVendor(Base):
         __tablename__ = "quote_request_vendors"
 
@@ -291,9 +323,8 @@ class QuoteRequestVendor(Base):
 
 class QuoteResponse(Base):
         __tablename__ = "quote_responses"
-        
         id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-        quote_request_id = Column(UUID(as_uuid=True), ForeignKey("material_requests.id", ondelete="CASCADE"), primary_key=True)
+        quote_request_id = Column(UUID(as_uuid=True), ForeignKey("material_requests.id", ondelete="CASCADE"))
         vendor_id = Column(UUID(as_uuid=True), ForeignKey("vendors.vendor_id", ondelete="CASCADE"), nullable=False)
         material_name = Column(String, nullable=False)
         specification = Column(String, nullable=True)
@@ -308,11 +339,96 @@ class VendorQuoteItem(Base):
     __tablename__ = "vendor_quote_items"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    quote_request_id = Column(UUID(as_uuid=True), ForeignKey("material_requests.id", ondelete="CASCADE"), nullable=False)
-    vendor_id = Column(UUID(as_uuid=True), ForeignKey("vendors.vendor_id", ondelete="CASCADE"), nullable=False)
+    # header-level pointer to the request this vendor is quoting against
+    quote_request_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("public.material_requests.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    # the specific line item being quoted
+    material_request_item_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("public.material_request_items.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    # who is quoting
+    vendor_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("public.vendors.vendor_id", ondelete="CASCADE"),
+        nullable=False,
+    )
     material_name = Column(String, nullable=False)
     quoted_price = Column(Float, nullable=False)
     comments = Column(Text, nullable=True)
 
     request = relationship("MaterialRequest", back_populates="vendor_quote_items")
     vendor = relationship("Vendor", back_populates="vendor_quote_items")
+
+    # relationships (bidirectional, explicit)
+    request = relationship("MaterialRequest", back_populates="vendor_quote_items")
+    material_request_item = relationship("MaterialRequestItem", back_populates="vendor_quote_items")
+    vendor = relationship("Vendor", back_populates="vendor_quote_items")
+
+    __table_args__ = (
+        Index("ix_vqi_request_vendor", "quote_request_id", "vendor_id"),
+        Index("ix_vqi_item_id", "material_request_item_id"),
+    )
+
+class CreditStatus(PyEnum):
+    PENDING = "pending"
+    APPROVED = "approved"
+    REJECTED = "rejected"
+    CLOSED = "closed"
+
+class CreditProfile(Base):
+    __tablename__ = "credit_profiles"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("public.users.id", ondelete="CASCADE"), unique=True, nullable=False)
+    aadhaar = Column(String(20), nullable=True)
+    pan = Column(String(10), nullable=True)
+    gst = Column(String(20), nullable=True)
+    status = Column(Enum(CreditStatus), default=CreditStatus.PENDING, nullable=False)
+    limit = Column(Float, default=0.0)   # Approved credit limit
+    used = Column(Float, default=0.0)    # Amount already used
+    trust_score = Column(Float, default=0.0)  # Bab.ai Trust Score
+    nbfc_partner = Column(String, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    user = relationship("User", back_populates="credit_profile")
+
+
+class CreditTransaction(Base):
+    __tablename__ = "credit_transactions"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    credit_profile_id = Column(UUID(as_uuid=True), ForeignKey("credit_profiles.id", ondelete="CASCADE"), nullable=False)
+    vendor_id = Column(UUID(as_uuid=True), ForeignKey("vendors.vendor_id", ondelete="SET NULL"))
+    amount = Column(Float, nullable=False)
+    description = Column(Text, nullable=True)
+    transaction_date = Column(DateTime, default=datetime.utcnow)
+    status = Column(String, default="pending")  # pending, settled, failed
+
+    profile = relationship("CreditProfile", backref="transactions")
+    vendor = relationship("Vendor")
+
+class PartnerStatusHistory(Base):
+    __tablename__ = "partner_status_history"
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    sender_id = Column(String, ForeignKey("users.sender_id", ondelete="CASCADE"), index=True, nullable=False)
+    partner = Column(String, nullable=False)              # "NBFC_X"
+    status = Column(String, nullable=False)               # "pending"/"approved"/"rejected"
+    score  = Column(Float, nullable=True)                 # normalize to 0–100 if partner gives raw value
+    limit  = Column(Float, nullable=True)
+    payload = Column(JSON, default=dict)                  # redacted/hashed; never store sensitive raw IDs
+    occurred_at = Column(DateTime, default=datetime.utcnow, index=True)
+
+    __all__ = [
+    "Base",
+    "RequestStatus",
+    "Project",
+    "Vendor",
+    "MaterialRequest",
+    "MaterialRequestItem",
+    "VendorQuoteItem",
+]
