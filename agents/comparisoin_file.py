@@ -1,7 +1,8 @@
+
+
 from fastapi import APIRouter, Request
-from agents import procurement_agent
 from orchastrator.core import builder_graph 
-import sys 
+import sys
 from fastapi.responses import PlainTextResponse
 import os
 from dotenv import load_dotenv
@@ -16,23 +17,21 @@ import json
 import agents.siteops_agent as siteops_agent
 from agents.random_agent import classify_and_respond
 from agents.procurement_agent import collect_procurement_details_interactively
-from agents import credit_agent
 from whatsapp.builder_out import whatsapp_output
 from users.user_onboarding_manager import user_status
 from database._init_ import AsyncSessionLocal
 from database.uoc_crud import DatabaseCRUD
 from managers.uoc_manager import UOCManager
+from managers.project_intel import get_region_via_llm
 from managers.project_intel import TaskHandler
-import os, time, json, hashlib
-from sqlalchemy import text
-from database._init_ import AsyncSessionLocal
-from fastapi import BackgroundTasks
-from fastapi.responses import Response
-import json
-from hashlib import sha256
-from fastapi import Request
+# from users.user_onboarding_service import get_user, collect_user_details_interactively
+# from state_builder import set_new_user_onboarding_state, state_existing_user_state
+
+load_dotenv(override=True)
+
 #This has to be updated accroding to he phone number you are using for the whatsapp business account.
-WHATSAPP_API_URL = "https://graph.facebook.com/v19.0/712076848650669/messages"
+WHATSAPP_API_URL = "https://graph.facebook.com/v19.0/768446403009450/messages"
+
 #ACCESS_TOKEN = "EAAIMZBw8BqsgBO4ZAdqhSNYjSuupWb2dw5btXJ6zyLUGwOUE5s5okrJnL4o4m89b14KQyZCjZBZAN3yZBCRanqLC82m59bGe4Rd2BPfRe3A3pvGFZCTf2xB7a6insIzesPDVMLIw4gwlMkkz7NGl3ZBLvP5MU8i3mZBMmUBShGeQkSlAyRhsXJtlsg8uGaAfYwTid8PZAGBKnbOR3LFpCgBD8ZCIMJh9xI0sHWy"  
 
 ACCESS_TOKEN = os.getenv("WHATSAPP_ACCESS_TOKEN")
@@ -120,13 +119,13 @@ def download_whatsapp_image(media_id: str) -> str:
     
     #Downloading media content
     image_data = requests.get(media_url, headers=headers).content
-    filename = f"C:/Users/koppi/OneDrive/Desktop/Bab.ai/{media_id}.jpg"
+    filename = f"C:/Users/vlaks/OneDrive/Documents/Bab.ai{media_id}.jpg"
     
     with open(filename, "wb") as f:
         f.write(image_data)
     
     print(f" Webhook :::::: download_whatsapp_image::::: Saved image to {filename}")
-    return filename
+    return filename 
       
 async def run_agent_by_name(agent_name: str, state: dict) -> dict:
     """
@@ -146,7 +145,7 @@ async def run_agent_by_name(agent_name: str, state: dict) -> dict:
 
     else:
         raise ValueError(f"Unknown agent name: {agent_name}")
-     
+    
 
 @router.get("/webhook")
 async def verify(request: Request):
@@ -162,32 +161,13 @@ async def verify(request: Request):
     return PlainTextResponse("Invalid token", status_code=403)
 
 
-#(SQLAlchemy) Helper
-async def first_time_event(event_id: str) -> bool:
-    """
-    True  -> first time (inserted)
-    False -> duplicate (conflict)
-    """
-    q = text("""
-        INSERT INTO whatsapp_events (event_id)
-        VALUES (:eid)
-        ON CONFLICT DO NOTHING
-        RETURNING 1
-    """)
-    print("Recording First event-----------")
-    async with AsyncSessionLocal() as session:
-        res = await session.execute(q, {"eid": event_id})
-        await session.commit()
-        return res.scalar() == 1
-def extract_event_id(payload: dict) -> str:
-    try:
-        return payload["entry"][0]["changes"][0]["value"]["messages"][0]["id"]
-    except Exception:
-        return sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
-async def handle_whatsapp_event(data: dict):
+@router.post("/webhook")
+async def whatsapp_webhook(request: Request):
+    print("Webhook :::::: whatsapp_webhook::::: ####Webhook Called####")
+    
     try:
         logger.info("Entered Webhook route")
-        #data = await request.json()
+        data = await request.json()
         #msg = data["entry"][0]["changes"][0]["value"]["messages"][0]
 
         entry = data["entry"][0]["changes"][0]["value"]
@@ -213,6 +193,11 @@ async def handle_whatsapp_event(data: dict):
         #state["user_full_name"] = user_name  
         user = user_status(sender_id, user_name)
         user_stage = user["user_stage"]
+        
+        # if get_user(sender_id) is None:
+        #     state = state_builder.set_new_user_onboarding_state()
+        # else:
+        #     state = state_builder.set_existing_user_state(sender_id, msg_type, msg, user_name, user_stage)
 
         if state is None:
             state = {
@@ -288,7 +273,7 @@ async def handle_whatsapp_event(data: dict):
 
             # Download the file
             ext = ".pdf" if file_type == "pdf" else ".bin"
-            local_path = f"C:/Users/koppi/OneDrive/Desktop/Bab.ai/{media_id}{ext}"
+            local_path = f"C:/Users/vlaks/OneDrive/Desktop/Bab.ai/{media_id}{ext}"
             try:
                 file_data = requests.get(media_url, timeout=10).content
                 with open(local_path, "wb") as fp:
@@ -347,61 +332,59 @@ async def handle_whatsapp_event(data: dict):
         # Agent returned with UOC pending
         #if state.get("needs_clarification", False):
         PROJECT_FORMATION_MESSAGES = [
-    "Okay.",
-    "Alright.",
-    "Got it.",
-    "Noted.",
-    "Understood.",
-    "Right.",
-    "Fine.",
-    "All right.",
-    "Clear.",
-    "Yes.",
-]
+            "Okay.",
+            "Alright.",
+            "Got it.",
+            "Noted.",
+            "Understood.",
+            "Right.",
+            "Fine.",
+            "All right.",
+            "Clear.",
+            "Yes.",
+        ]
 
         PLAN_OR_DOC_MESSAGES = [
             "No problem. Just answer a few quick questions — we’ll set up your project, and auto-link all future updates.",
-
-"OKay! Let’s start from scratch — fast. A few simple answers now, and everything else will connect automatically.",
-
-"That’s fine. You’ll be done in under a minute — we’ll match future updates to this project for you.",
-
-"Sure, we work with whatever you’ve got. Just a few taps now — Bab.ai will keep everything neatly linked from here on.",
+            "OKay! Let’s start from scratch — fast. A few simple answers now, and everything else will connect automatically.",
+            "That’s fine. You’ll be done in under a minute — we’ll match future updates to this project for you.",
+            "Sure, we work with whatever you’ve got. Just a few taps now — Bab.ai will keep everything neatly linked from here on.",
         ]
 
         PROJECT_SELECTION_MESSAGES = [
             "🔍 Hold on... I’m figuring out which project you’re referring to.",
             "📁 Let me check if this matches any existing projects.",
-            "🗂️ Matching this conversation to the right project for context.",
+            "🗂 Matching this conversation to the right project for context.",
         ]
 
         FIRST_TIME_MESSAGES = [
-             "Alright, let’s take a look.",
-    "Okay, I’m with you.",
-    "Sure, let's get started.",
-    "Got it. Let’s take the first step.",
-    "Alright. We'll go one thing at a time.",
-    "I’m here. Let’s begin.",
-    "Alright — starting simple.",
-    "Okay, let's figure this out together.",
-    "All good. Let me guide you from here.",
-    "That’s received. Let’s begin from the basics.",
-    "Okay, let’s make this easy.",
-    "Alright. Just need a small detail to begin.",
-    "Let’s start gently. One quick check first.",
-    "Thanks. I’ll take it from here.",
-    "Got it. Let’s just set the context right.",
-    "With you. Let’s start at the beginning.",
-    "Noted. I’ll guide you from here.",
-    "Okay, let’s get some clarity first.",
-    "Right, let’s set the ground.",
-    "Perfect. Let’s walk through it step by step.", 
+            "Alright, let’s take a look.",
+            "Okay, I’m with you.",
+            "Sure, let's get started.",
+            "Got it. Let’s take the first step.",
+            "Alright. We'll go one thing at a time.",
+            "I’m here. Let’s begin.",
+            "Alright — starting simple.",
+            "Okay, let's figure this out together.",
+            "All good. Let me guide you from here.",
+            "That’s received. Let’s begin from the basics.",
+            "Okay, let’s make this easy.",
+            "Alright. Just need a small detail to begin.",
+            "Let’s start gently. One quick check first.",
+            "Thanks. I’ll take it from here.",
+            "Got it. Let’s just set the context right.",
+            "With you. Let’s start at the beginning.",
+            "Noted. I’ll guide you from here.",
+            "Okay, let’s get some clarity first.",
+            "Right, let’s set the ground.",
+            "Perfect. Let’s walk through it step by step.", 
         ]
         try:
                 async with AsyncSessionLocal() as session:
                    crud = DatabaseCRUD(session)
                    uoc_mgr = UOCManager(crud)
                    task_handler = TaskHandler(crud)  # Initialize TaskHandler with the same CRUD instance
+                #    procurement_mgr = ProcurementManager(crud)
                    #uoc_mgr = UOCManager()  # Instantiate the class
         except Exception as e:
                 print("Webhook :::::: whatsapp_webhook::::: Error instantiating UOCManager:", e)
@@ -424,6 +407,13 @@ async def handle_whatsapp_event(data: dict):
                     except Exception as e:
                         print("Webhook :::::: whatsapp_webhook::::: Error calling classify_and_respond in onboarding:", e)
             
+            if q_type == "user_onboarding":
+                print("Webhook :::::: whatsapp_webhook::::: <needs_clarification True>::::: <uoc_question_type>::::: -- The set question type is user_onboarding, so calling ??user_onboarding_manager.create_user_interactively?? --", state["uoc_question_type"])
+                try:
+                    followups_state = await create_user_interactively(state)
+                except Exception as e:
+                    print("Webhook :::::: whatsapp_webhook::::: Error calling create_user_interactively:", e)
+                    traceback.print_exc()
             
             elif q_type == "project_formation":
                 whatsapp_output(sender_id, random.choice(PROJECT_FORMATION_MESSAGES), message_type="plain")
@@ -456,7 +446,7 @@ async def handle_whatsapp_event(data: dict):
                                 ),
                                 needs_clarification=True,
                             )
-                    else:
+                    else: 
                         whatsapp_output(
                             sender_id,
                             random.choice(PLAN_OR_DOC_MESSAGES),
@@ -471,26 +461,15 @@ async def handle_whatsapp_event(data: dict):
                 if msg.get("type") == "interactive" and msg["interactive"].get("type") == "button_reply":
                     button_id = msg["interactive"]["button_reply"]["id"]
                     button_title = msg["interactive"]["button_reply"]["title"]
-                    
+
                     if button_id == "add_new":
                         # Call your select_or_create_project flow
-                        
                         followups_state = await uoc_mgr.select_or_create_project(state, None)
                     else:
                         followups_state = await task_handler.handle_job_update(state)
             elif q_type == "task_region_identification":
-                print("Webhook :::::: whatsapp_webhook::::: <needs_clarification True>::::: <uoc_question_type>::::: -- The set question type is task_region_identification, so calling ??get_region_via_llm?? --")
-                try:
-                    followups_state = await task_handler.get_region_via_llm(state)
-                except Exception as e:
-                    print("Webhook :::::: whatsapp_webhook::::: Error in get_region_via_llm:", e)
-                    import traceback; traceback.print_exc()
-                    followups_state = state
-                    followups_state.update(
-                        latest_respons="Sorry, I couldn't determine the region. Please try again.",
-                        needs_clarification=True,
-                    ) 
-            
+                followups_state = await get_region_via_llm(state)
+
             elif q_type == "siteops_welcome":
                 print("Webhook :::::: whatsapp_webhook::::: <needs_clarification True>::::: <uoc_question_type>::::: -- The set question type is siteops_welcome, so calling ??siteops_agent.new_user_flow?? --", state["uoc_question_type"])
                 try:
@@ -510,60 +489,36 @@ async def handle_whatsapp_event(data: dict):
                 response_msg = followups_state.get("latest_respons", "No response available.")
                 message_type = followups_state.get("uoc_next_message_type", "plain")
                 extra_data = followups_state.get("uoc_next_message_extra_data", None)
-                #whatsapp_output(sender_id, response_msg, message_type=message_type, extra_data=extra_data)
+                whatsapp_output(sender_id, response_msg, message_type=message_type, extra_data=extra_data)
                 return {"status": "done", "reply": response_msg}
-               
-            elif q_type== "procurement_new_user_flow":
-                print("Webhook :::::: whatsapp_webhook::::: q_type = procurement_new_user_flow :::: The set question type is procurement_new_user_flow, so calling ??procurement_agent.run_procurement_agent?? --", state["uoc_question_type"])
-                followups_state = await procurement_agent.run_procurement_agent(state, config={"configurable": {"crud": crud}})
+                # from managers.procurement_manager import ProcurementManager
+                # whatsapp_output(sender_id, "Let's start with procurement details. Please send the list of materials or upload a BOQ/photo.", message_type="plain")
+                # try:
+                #     async with AsyncSessionLocal() as session:
+                #         crud = DatabaseCRUD(session)
+                #         procurement_mgr = ProcurementManager(crud)
+                #         followups_state = await procurement_mgr.collect_procurement_details(state)
+                # except Exception as e:
+                #     print("Webhook :::::: whatsapp_webhook::::: Error calling collect_procurement_details:", e)
+                #     import traceback; traceback.print_exc()
+                #     followups_state = state
+                #     followups_state.update(
+                #         latest_respons="Sorry, there was an error processing your procurement details.",
+                #         needs_clarification=True,
+                #     )
+                # save_state(sender_id, followups_state)
+                # response_msg = followups_state.get("latest_respons", "No response available.")
+                # message_type = followups_state.get("uoc_next_message_type", "plain")
+                # extra_data = followups_state.get("uoc_next_message_extra_data", None)
+                # whatsapp_output(sender_id, response_msg, message_type=message_type, extra_data=extra_data)
+                # return {"status": "done", "reply": response_msg}
 
-            elif q_type == "credit_start": 
-                print("Webhook :::::: whatsapp_webhook::::: <needs_clarification True>::::: <uoc_question_type>::::: -- The set question type is credit_onboard_start, so calling ??credit_agent.run_credit_agent?? --", state["uoc_question_type"])
-                try:
-                    followups_state = await credit_agent.run_credit_agent(state, config={"configurable": {"crud": crud}})
-                except Exception as e:
-                    print("Webhook :::::: whatsapp_webhook::::: Error calling credit_agent.run_credit_agent:", e)
-                    import traceback; traceback.print_exc()
             
-            elif q_type == "credit_onboard_aadhaar":
-                print("Webhook :::::: whatsapp_webhook::::: <needs_clarification True>::::: <uoc_question_type>::::: -- The set question type is credit_onboard_aadhaar, so calling ??credit_agent.handle_collect_aadhaar?? --", state["uoc_question_type"])
-                try:
-                    followups_state = await credit_agent.handle_collect_aadhaar(state)
-                except Exception as e:
-                    print("Webhook :::::: whatsapp_webhook::::: Error calling credit_agent.handle_collect_aadhaar:", e)
-                    import traceback; traceback.print_exc()
-            elif q_type == "credit_onboard_pan":
-                print("Webhook :::::: whatsapp_webhook::::: <needs_clarification True>::::: <uoc_question_type>::::: -- The set question type is credit_onboard_pan, so calling ??credit_agent.handle_collect_pan?? --", state["uoc_question_type"])
-                try:
-                    followups_state = await credit_agent.handle_collect_pan(state)
-                except Exception as e:
-                    print("Webhook :::::: whatsapp_webhook::::: Error calling credit_agent.handle_collect_pan:", e)
-                    import traceback; traceback.print_exc()
-            elif q_type == "credit_onboard_gst":
-                print("Webhook :::::: whatsapp_webhook::::: <needs_clarification True>::::: <uoc_question_type>::::: -- The set question type is credit_onboard_gst, so calling ??credit_agent.handle_collect_gst?? --", state["uoc_question_type"])
-                try:
-                    followups_state = await credit_agent.handle_collect_gst(state)
-                except Exception as e:
-                    print("Webhook :::::: whatsapp_webhook::::: Error calling credit_agent.handle_collect_gst:", e)
-                    import traceback; traceback.print_exc()
-            elif q_type =="credit_onboard_consent":
-                print("Webhook :::::: whatsapp_webhook::::: <needs_clarification True>::::: <uoc_question_type>::::: -- The set question type is credit_onboard_consent, so calling ??credit_agent.handle_collect_consent?? --", state["uoc_question_type"])
-                try:
-                    followups_state = await credit_agent.handle_collect_consent(state)
-                except Exception as e:
-                    print("Webhook :::::: whatsapp_webhook::::: Error calling credit_agent.handle_collect_consent:", e)
-                    import traceback; traceback.print_exc()
-            elif q_type=="credit_status_check":
-                print("Webhook :::::: whatsapp_webhook::::: <needs_clarification True>::::: <uoc_question_type>::::: -- The set question type is credit_status_check, so calling ??credit_agent.handle_credit_status_check?? --", state["uoc_question_type"])
-                try:
-                    followups_state = await credit_agent.handle_poll_approval(state)
-                except Exception as e:
-                    print("Webhook :::::: whatsapp_webhook::::: Error calling credit_agent.handle_credit_status_check:", e)
-                    import traceback; traceback.print_exc()
             else:
                 raise ValueError(f"Unknown uoc_question_type: {state['uoc_question_type']}")
-
-        #print("State after classify_and_respond=====", followups_state)
+            
+        
+                #print("State after classify_and_respond=====", followups_state)
             
             if followups_state.get("needs_clarification") is False and followups_state.get("uoc_confidence") in ["high"]:
                 print("Webhook :::::: whatsapp_webhook::::: <needs_clarification True>::::: <needs_clarification>::::: -- UOC is now confident, calling the agent --")
@@ -572,14 +527,17 @@ async def handle_whatsapp_event(data: dict):
 
 
             #followups_state = await UOCManager.run(state, called_by=state.get("uoc_last_called_by", "unknown"))
-            save_state(sender_id, followups_state)  # Save the updated state back to Redis
+            try:
+                save_state(sender_id, followups_state)  # Save the updated state back to Redis
+            except Exception as e:
+                print("Webhook :::::: whatsapp_webhook::::: Error saving followups_state:", e)
             print("Webhook :::::: whatsapp_webhook::::: -- Got result from the called agent, saved the state : --: ", followups_state)
             response_msg= followups_state.get("latest_respons", "No response available.")
             message_type= followups_state.get("uoc_next_message_type", "plain")
             extra_data= followups_state.get("uoc_next_message_extra_data", None)
             print("Webhook :::::: whatsapp_webhook::::: -- ******Sending message to whatsapp****** Attributes: -- ", message_type, extra_data)
             whatsapp_output(sender_id, response_msg, message_type=message_type, extra_data=extra_data)
-     
+    
         # This is redundant because the uoc_confidence -> high state is handled in UOC manager and that state is sent to the agent directly. There wont be a response back to the user when the state is high. 
         # elif  state.get("needs_clarification") is False and state.get("uoc_confidence") in ["High"]:
         #      # UOC is now confident, resume agent
@@ -599,14 +557,14 @@ async def handle_whatsapp_event(data: dict):
             print("Calling builder_graph:", builder_graph)
             print("Type of builder_graph:", type(builder_graph))
             #PassingDB Session as a  contextwrapper to Langgraph; dont send crud in a state, it break the serialization. 
-            async with AsyncSessionLocal() as session:
-             crud = DatabaseCRUD(session)
-             result = await builder_graph.ainvoke(input=state, config={"crud": crud})
-             
- 
+            # async with AsyncSessionLocal() as session:
+            #  crud = DatabaseCRUD(session)
+            result = await builder_graph.ainvoke(input=state, config={"crud": crud})
+
+
 
             save_state(sender_id, result)
-            #print("Webhook :::::: whatsapp_webhook::::: <needs_clarification False>:::::  -- Got result from the Orchestrator, saved the state : --", get_state(sender_id))
+            print("Webhook :::::: whatsapp_webhook::::: <needs_clarification False>:::::  -- Got result from the Orchestrator, saved the state : --", get_state(sender_id))
             # print("result after saving in condition ", result)
         # Send final reply
         #response_msg = state["latest_response"] if "latest_response" in state else "No response available."
@@ -615,11 +573,8 @@ async def handle_whatsapp_event(data: dict):
         message_type= result.get("uoc_next_message_type", "plain")
         extra_data= result.get("uoc_next_message_extra_data", None)
         print("Webhook :::::: whatsapp_webhook:::::-- ******Sending message to whatsapp****** Attributes :", message_type, extra_data)
-        try:
-            whatsapp_output(sender_id, response_msg, message_type=message_type, extra_data=extra_data)
-            logger.info("Final response sent to WhatsApp")
-        except Exception as send_err:
-            logger.error(f"Failed to send WhatsApp response: {send_err}")
+        whatsapp_output(sender_id, response_msg, message_type=message_type, extra_data=extra_data)
+        logger.info("Final response sent to WhatsApp")
         return {"status": "done", "reply": response_msg}
     
        
@@ -628,23 +583,32 @@ async def handle_whatsapp_event(data: dict):
         #logger.error(e, exc_info=True)
         return {"status": "error", "message": str(e)}
 
+# @router.get("/webhook/material")
+# async def get_materials_by_sender(request: Request):
+#     """
+#     Get all materials for a given project.
+#     """
+#     try:
+#         data = await request.json()
+#         #msg = data["entry"][0]["changes"][0]["value"]["messages"][0]
 
-@router.post("/webhook")
-async def whatsapp_webhook(request: Request,background_tasks: BackgroundTasks):
-    print("Webhook :::::: whatsapp_webhook::::: ####Webhook Called####")
-    raw = await request.body()
-    data = json.loads(raw)
+#         entry = data["entry"][0]["changes"][0]["value"]
+#         print("Webhook :::::: get_materials_by_sender::::: entry:", entry)
+#         if "messages" not in entry:
+#             logger.info("No messages found in the entry.")
+#             return {"status": "ignored", "reason": "No messages found"}
+#         msg = entry["messages"][0]
 
-    eid = extract_event_id(data)
-    if not await first_time_event(eid):
-        print("Duplicate/ Noise - Sending status 200***")
-        return Response(status_code=200)  # duplicate, swallow
+        
+#         print("Webhook :::::: get_materials_by_sender::::: Received message:", msg)
+#         sender_id = msg["from"]
+#         print("Webhook :::::: get_materials_by_sender::::: sender_id:", sender_id)
+#         state = get_state(sender_id)
+#         print("Webhook :::::: get_materials_by_sender::::: material state received:", state)
+#         return {"status": "success", "materials": [material.to_dict() for material in state.get("procurement_details", {}).get("materials", [])]}
+#     except Exception as e:
+#         logger.error(f"Error fetching materials for project {sender_id}: {e}")
+#         return {"status": "error", "message": str(e)}
 
-    entry = data.get("entry", [{}])[0].get("changes", [{}])[0].get("value", {})
-    if not entry.get("messages"):  # statuses / noise
-        print("Statuses/ Noise - Sending status 200***")
-        return Response(status_code=200)
 
-    background_tasks.add_task(handle_whatsapp_event, data)
-    return Response(status_code=200)
-    
+
