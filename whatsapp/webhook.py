@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Request, Depends, Request
 from agents import procurement_agent
 from orchastrator.core import builder_graph 
 import sys 
@@ -6,6 +6,7 @@ from fastapi.responses import PlainTextResponse
 import os
 from dotenv import load_dotenv
 from managers.uoc_manager import UOCManager
+import logging
 router = APIRouter()
 from app.logging_config import logger
 import requests
@@ -25,12 +26,14 @@ from managers.uoc_manager import UOCManager
 from managers.project_intel import TaskHandler
 import os, time, json, hashlib
 from sqlalchemy import text
-from database._init_ import AsyncSessionLocal
+from sqlalchemy.ext.asyncio import AsyncSession
 from fastapi import BackgroundTasks
 from fastapi.responses import Response
 import json
 from hashlib import sha256
-from fastapi import Request
+from app.db import get_session
+from database.whatsapp_crud import first_time_event
+
 #This has to be updated accroding to he phone number you are using for the whatsapp business account.
 WHATSAPP_API_URL = "https://graph.facebook.com/v19.0/712076848650669/messages"
 #ACCESS_TOKEN = "EAAIMZBw8BqsgBO4ZAdqhSNYjSuupWb2dw5btXJ6zyLUGwOUE5s5okrJnL4o4m89b14KQyZCjZBZAN3yZBCRanqLC82m59bGe4Rd2BPfRe3A3pvGFZCTf2xB7a6insIzesPDVMLIw4gwlMkkz7NGl3ZBLvP5MU8i3mZBMmUBShGeQkSlAyRhsXJtlsg8uGaAfYwTid8PZAGBKnbOR3LFpCgBD8ZCIMJh9xI0sHWy"  
@@ -162,23 +165,23 @@ async def verify(request: Request):
     return PlainTextResponse("Invalid token", status_code=403)
 
 
-#(SQLAlchemy) Helper
-async def first_time_event(event_id: str) -> bool:
-    """
-    True  -> first time (inserted)
-    False -> duplicate (conflict)
-    """
-    q = text("""
-        INSERT INTO whatsapp_events (event_id)
-        VALUES (:eid)
-        ON CONFLICT DO NOTHING
-        RETURNING 1
-    """)
-    print("Recording First event-----------")
-    async with AsyncSessionLocal() as session:
-        res = await session.execute(q, {"eid": event_id})
-        await session.commit()
-        return res.scalar() == 1
+# #(SQLAlchemy) Helper
+# async def first_time_event(event_id: str) -> bool:
+#     """
+#     True  -> first time (inserted)
+#     False -> duplicate (conflict)
+#     """
+#     q = text("""
+#         INSERT INTO whatsapp_events (event_id)
+#         VALUES (:eid)
+#         ON CONFLICT DO NOTHING
+#         RETURNING 1
+#     """)
+#     print("Recording First event-----------")
+#     async with AsyncSessionLocal() as session:
+#         res = await session.execute(q, {"eid": event_id})
+#         await session.commit()
+#         return res.scalar() == 1
 def extract_event_id(payload: dict) -> str:
     try:
         return payload["entry"][0]["changes"][0]["value"]["messages"][0]["id"]
@@ -628,23 +631,56 @@ async def handle_whatsapp_event(data: dict):
         #logger.error(e, exc_info=True)
         return {"status": "error", "message": str(e)}
 
+@router.get("/webhook")
+async def verify(request: Request):
+    q = request.query_params
+    if q.get("hub.mode") == "subscribe" and q.get("hub.verify_token") == "babai":
+        return PlainTextResponse(q.get("hub.challenge", "0"))
+    return PlainTextResponse("Invalid token", status_code=403)
+
+router = APIRouter(prefix="/whatsapp", tags=["whatsapp"])
 
 @router.post("/webhook")
-async def whatsapp_webhook(request: Request,background_tasks: BackgroundTasks):
+async def whatsapp_webhook(
+    request: Request,
+    session: AsyncSession = Depends(get_session),
+):
     print("Webhook :::::: whatsapp_webhook::::: ####Webhook Called####")
-    raw = await request.body()
-    data = json.loads(raw)
+
+    # Parse body safely
+    try:
+        data = await request.json()
+    except Exception:
+        try:
+            data = json.loads((await request.body()) or b"{}")
+        except Exception:
+            return PlainTextResponse("OK", status_code=200)
 
     eid = extract_event_id(data)
-    if not await first_time_event(eid):
-        print("Duplicate/ Noise - Sending status 200***")
-        return Response(status_code=200)  # duplicate, swallow
+    if not eid:
+        return PlainTextResponse("OK", status_code=200)
+
+    try:
+        is_first = await first_time_event(session, eid)
+    except Exception:
+        logging.exception("first_time_event failed")
+        return PlainTextResponse("OK", status_code=200)
+
+    if not is_first:
+        print("Duplicate/Noise - 200 OK")
+        return PlainTextResponse("OK", status_code=200)
 
     entry = data.get("entry", [{}])[0].get("changes", [{}])[0].get("value", {})
-    if not entry.get("messages"):  # statuses / noise
-        print("Statuses/ Noise - Sending status 200***")
-        return Response(status_code=200)
+    if not entry.get("messages"):
+        print("Statuses/Noise - 200 OK")
+        return PlainTextResponse("OK", status_code=200)
 
-    background_tasks.add_task(handle_whatsapp_event, data)
-    return Response(status_code=200)
-    
+    # schedule async work on the running loop
+    asyncio.create_task(_safe_handle_whatsapp_event(data))
+    return PlainTextResponse("OK", status_code=200)
+
+async def _safe_handle_whatsapp_event(payload: dict):
+    try:
+        await handle_whatsapp_event(payload)  # <-- your async worker
+    except Exception:
+        logging.exception("handle_whatsapp_event failed")

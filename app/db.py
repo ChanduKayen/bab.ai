@@ -1,18 +1,27 @@
+# app/db.py
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
 from sqlalchemy.orm import DeclarativeBase
-from .config import Settings, get_db_url
+from .config import Settings, get_db_url  # your existing config
 
 settings = Settings()
 DATABASE_URL = get_db_url(settings)
+# NOTE: if the password has '@', encode it: '@' -> %40
 
-engine = create_async_engine(DATABASE_URL, pool_size=5, max_overflow=10)
-SessionLocal = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
+engine = create_async_engine(
+    DATABASE_URL,
+    echo=False,
+    pool_size=5,
+    max_overflow=10,
+    pool_pre_ping=True,   # drop dead conns cleanly (App Runner helpful)
+    pool_recycle=300,
+)
 
 class Base(DeclarativeBase):
     pass
 
-from typing import AsyncGenerator
+SessionLocal = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
 
+from typing import AsyncGenerator
 async def get_session() -> AsyncGenerator[AsyncSession, None]:
     async with SessionLocal() as session:
         yield session

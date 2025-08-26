@@ -15,7 +15,7 @@ from database.uoc_crud import DatabaseCRUD
 from dotenv import load_dotenv
 import json  # Import the json module
 import re
-from database._init_ import AsyncSessionLocal
+from app.db import SessionLocal
 from whatsapp import apis
 from whatsapp.builder_out import whatsapp_output
 from agents.credit_agent import  run_credit_agent
@@ -490,7 +490,7 @@ async def handle_credit(state: AgentState, crud: ProcurementCRUD,  uoc_next_mess
     """    
     print("Procurement Agent::::: handle_credit:::::  --Handling credit intent --")
     try:        
-            async with AsyncSessionLocal() as session:
+            async with SessionLocal() as session:
                        crud = DatabaseCRUD(session)
                        return await run_credit_agent(state, config={"configurable": {"crud": crud}})
     except Exception as e:
@@ -599,7 +599,7 @@ async def new_user_flow(state: AgentState, crud: ProcurementCRUD  ) -> AgentStat
         print("Procurement Agent:::: new_user_flow : extracted materials:", state["procurement_details"]["materials"])
         
         try:
-            async with AsyncSessionLocal() as session:
+            async with SessionLocal() as session:
                 procurement_mgr = ProcurementManager(session)
             print("Procurement Agent:::: new_user_flow :::: calling persist_procurement for material : ", state["procurement_details"]["materials"])
             #material_request_id = await procurement_mgr.persist_procurement(state)
@@ -973,7 +973,7 @@ async def collect_procurement_details_interactively(state: dict) -> dict:
         if state.get("uoc_confidence") == "high":
             print("procurement_agent :::: collect_procurement_details_interactively :::: Procurement details are complete.")
             try:
-                async with AsyncSessionLocal() as session:
+                async with SessionLocal() as session:
                     procurement_mgr = ProcurementManager(session)
                     request_id = state.get("active_material_request_id")
                     if request_id:
@@ -1060,7 +1060,7 @@ async def run_procurement_agent(state: dict,  config: dict) -> dict:
         return await _HANDLER_MAP[last_msg.lower()](state,  config, state.get("uoc_next_message_extra_data", []))
 
     try:
-        async with AsyncSessionLocal() as session:
+        async with SessionLocal() as session:
             procurement_mgr = ProcurementManager(session)
     except Exception as e:
         print("Procurement Agent:::: run_procurement_agent : failed to initialize session:", e)
