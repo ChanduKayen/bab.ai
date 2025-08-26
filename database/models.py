@@ -3,15 +3,22 @@ from datetime import datetime, date
 from sqlalchemy import (
     ARRAY, Boolean, Column, String, Text, Integer, BigInteger, ForeignKey, Date, 
     Index, Enum, JSON, text, DateTime, UniqueConstraint, Float)
-from sqlalchemy.orm import DeclarativeBase, Mapped, relationship, declarative_base
+from sqlalchemy.orm import DeclarativeBase, Mapped, relationship, declarative_base, mapped_column
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.schema import MetaData
 from enum import Enum as PyEnum
 import uuid
+from sqlalchemy.sql import func
+from sqlalchemy import TIMESTAMP
+from app.db import Base
 
+# class Base(DeclarativeBase):
+#     metadata = MetaData(schema="public")
 
-class Base(DeclarativeBase):
-    metadata = MetaData(schema="public")
+class WhatsAppEvent(Base):
+    __tablename__ = "whatsapp_events"
+    event_id: Mapped[str] = mapped_column(String, primary_key=True)
+    created_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), server_default=func.now())
 # ---------- hierarchy -----------------------------------------------------
 class Project(Base):
     __tablename__ = "projects"
