@@ -35,24 +35,22 @@ pillow>=10.0,<11               # PIL for content_card image generation
 
 # ── Safe optionals (comment in if/when you use them) ─────────────────────────
 redis>=5.0,<6                # you referenced Redis in comments; enable if using it
-tenacity>=8.2,<9             # robust retries for OpenAI/WhatsApp/S3 calls
-aiosqlite>=0.19,<1           # if you run SQLite via "sqlite+aiosqlite://"
-psycopg[binary]>=3.1,<4      # if Alembic runs with sync Postgres engine
-aiofiles>=23.2,<24           # if serving files via FastAPI StaticFiles/streaming
-email-validator>=2.1,<3      # only if you actually use pydantic.EmailStr
-python-jose>=3.3,<4         # if you use JWTs for auth (not currently)
-langchain-community>=0.2.0,<1 # if you use community features
-langchain-experimental>=0.2.0,<1 # if you use experimental features
-#── Linting, formatting, and dev tools (optional, recommended for dev) ────────
-black>=24.3,<25               # code formatter
-isort>=5.13,<6                # import sorter
-flake8>=7.0,<8                # linter
-mypy>=1.10,<2                 # static type checker
+# tenacity>=8.2,<9             # robust retries for OpenAI/WhatsApp/S3 calls
+# aiosqlite>=0.19,<1           # if you run SQLite via "sqlite+aiosqlite://"
+# psycopg[binary]>=3.1,<4      # if Alembic runs with sync Postgres engine
+# aiofiles>=23.2,<24           # if serving files via FastAPI StaticFiles/streaming
+# email-validator>=2.1,<3      # only if you actually use pydantic.EmailStr
 
-#── Testing (optional, recommended for dev) ───────────────────────────────────
-pytest>=8.2,<9                # test runner
-pytest-asyncio>=0.23,<1       # async test support
+# #── Linting, formatting, and dev tools (optional, recommended for dev) ────────
+# black>=24.3,<25               # code formatter
+# isort>=5.13,<6                # import sorter
+# flake8>=7.0,<8                # linter
+# mypy>=1.10,<2                 # static type checker
 
-#── Typing (optional, for type hints) ─────────────────────────────────────────
-types-requests>=2.32,<3       # type hints for requests
-types-python-dotenv>=1.0,<2   # type hints for python-dotenv
+# #── Testing (optional, recommended for dev) ───────────────────────────────────
+# pytest>=8.2,<9                # test runner
+# pytest-asyncio>=0.23,<1       # async test support
+
+# #── Typing (optional, for type hints) ─────────────────────────────────────────
+# types-requests>=2.32,<3       # type hints for requests
+# types-python-dotenv>=1.0,<2   # type hints for python-dotenv
