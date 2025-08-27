@@ -1,6 +1,7 @@
 # app/db.py
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
 from sqlalchemy.orm import DeclarativeBase
+from sqlalchemy import MetaData
 from .config import Settings, get_db_url  # your existing config
 
 settings = Settings()
@@ -17,11 +18,12 @@ engine = create_async_engine(
 )
 
 class Base(DeclarativeBase):
-    pass
+    metadata = MetaData(schema="public")
 
 SessionLocal = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
 
 from typing import AsyncGenerator
 async def get_session() -> AsyncGenerator[AsyncSession, None]:
+    print("db :::::: get_session::::: getting session ; DB URL:", DATABASE_URL)
     async with SessionLocal() as session:
         yield session
