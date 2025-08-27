@@ -650,6 +650,7 @@ async def whatsapp_webhook(
     # Parse body safely
     try:
         data = await request.json()
+        print("Webhook :::::: whatsapp_webhook::::: data", data)
     except Exception:
         try:
             data = json.loads((await request.body()) or b"{}")
@@ -661,6 +662,7 @@ async def whatsapp_webhook(
         return PlainTextResponse("OK", status_code=200)
 
     try:
+        print("Webhook :::::: whatsapp_webhook::::: Calling First time event")
         is_first = await first_time_event(session, eid)
     except Exception:
         logging.exception("first_time_event failed")
