@@ -1,39 +1,58 @@
-# Web framework
+# ── Web framework & ASGI stack ────────────────────────────────────────────────
 fastapi>=0.111,<1.0
 uvicorn[standard]>=0.30,<1.0
 gunicorn>=21.2,<22
 
-# DB + async driver
+# ── DB & migrations (SQLAlchemy 2.x async with Postgres) ─────────────────────
 sqlalchemy>=2.0,<3
 asyncpg>=0.29,<1
-greenlet>=3.0,<4          # SQLAlchemy async uses greenlet under the hood in places
-alembic>=1.13,<2          # migrations
+greenlet>=3.0,<4              # required by some SQLAlchemy async contexts
+alembic>=1.13,<2              # your models/migrations toolchain
 
-# Pydantic v2 stack + env
+# ── Pydantic v2 & settings/env ───────────────────────────────────────────────
 pydantic>=2.7,<3
 pydantic-settings>=2.3,<3
 python-dotenv>=1.0,<2
 
-# HTTP clients
+# ── HTTP clients & uploads ───────────────────────────────────────────────────
 requests>=2.32,<3
-httpx>=0.27,<1
-python-multipart>=0.0.9,<1   # forms/uploads
+httpx>=0.27,<1                 # used in services / future async calls
+python-multipart>=0.0.9,<1     # FastAPI form/file parsing
 
-# OpenAI + LangChain
+# ── OpenAI / LangChain / LangGraph (agents & orchestration) ──────────────────
 openai>=1.40,<2
 langchain-core>=0.2.41,<1
 langchain-openai>=0.1.22,<1
-# (add langchain-community if you use loaders/tools from it)
-# langchain-community>=0.2.0,<1
+langgraph>=0.2.14,<1           # imported in orchastrator.core
 
-# AWS SDK
+# ── AWS SDK (S3, etc.) ───────────────────────────────────────────────────────
 boto3>=1.34,<2
 
-# Optional perf
-orjson>=3.10,<4
+# ── Performance & utilities ──────────────────────────────────────────────────
+orjson>=3.10,<4                # FastAPI response serialization (optional but present)
+rapidfuzz>=3.0,<4.0            # used in managers.uoc_manager
+pillow>=10.0,<11               # PIL for content_card image generation
 
-# Fuzzy matching (fixes your crash)
-rapidfuzz>=3.0,<4.0
+# ── Safe optionals (comment in if/when you use them) ─────────────────────────
+redis>=5.0,<6                # you referenced Redis in comments; enable if using it
+tenacity>=8.2,<9             # robust retries for OpenAI/WhatsApp/S3 calls
+aiosqlite>=0.19,<1           # if you run SQLite via "sqlite+aiosqlite://"
+psycopg[binary]>=3.1,<4      # if Alembic runs with sync Postgres engine
+aiofiles>=23.2,<24           # if serving files via FastAPI StaticFiles/streaming
+email-validator>=2.1,<3      # only if you actually use pydantic.EmailStr
+python-jose>=3.3,<4         # if you use JWTs for auth (not currently)
+langchain-community>=0.2.0,<1 # if you use community features
+langchain-experimental>=0.2.0,<1 # if you use experimental features
+#── Linting, formatting, and dev tools (optional, recommended for dev) ────────
+black>=24.3,<25               # code formatter
+isort>=5.13,<6                # import sorter
+flake8>=7.0,<8                # linter
+mypy>=1.10,<2                 # static type checker
 
-# Imaging (PIL)
-pillow>=10.0,<11
+#── Testing (optional, recommended for dev) ───────────────────────────────────
+pytest>=8.2,<9                # test runner
+pytest-asyncio>=0.23,<1       # async test support
+
+#── Typing (optional, for type hints) ─────────────────────────────────────────
+types-requests>=2.32,<3       # type hints for requests
+types-python-dotenv>=1.0,<2   # type hints for python-dotenv
