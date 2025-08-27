@@ -34,3 +34,6 @@ orjson>=3.10,<4
 
 # Fuzzy matching (fixes your crash)
 rapidfuzz>=3.0,<4.0
+
+# Imaging (PIL)
+pillow>=10.0,<11
