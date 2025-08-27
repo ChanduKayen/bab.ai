@@ -6,6 +6,8 @@ gunicorn>=21.2,<22
 # DB + async driver
 sqlalchemy>=2.0,<3
 asyncpg>=0.29,<1
+greenlet>=3.0,<4          # SQLAlchemy async uses greenlet under the hood in places
+alembic>=1.13,<2          # migrations
 
 # Pydantic v2 stack + env
 pydantic>=2.7,<3
@@ -15,15 +17,20 @@ python-dotenv>=1.0,<2
 # HTTP clients
 requests>=2.32,<3
 httpx>=0.27,<1
-python-multipart>=0.0.9,<1   # needed if you ever parse forms/uploads
+python-multipart>=0.0.9,<1   # forms/uploads
 
-# OpenAI + LangChain (use v1 OpenAI; required by langchain-openai)
+# OpenAI + LangChain
 openai>=1.40,<2
 langchain-core>=0.2.41,<1
 langchain-openai>=0.1.22,<1
+# (add langchain-community if you use loaders/tools from it)
+# langchain-community>=0.2.0,<1
 
 # AWS SDK
 boto3>=1.34,<2
 
-# Optional perf (FastAPI can use this automatically if present)
+# Optional perf
 orjson>=3.10,<4
+
+# Fuzzy matching (fixes your crash)
+rapidfuzz>=3.0,<4.0
