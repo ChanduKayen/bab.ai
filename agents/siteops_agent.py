@@ -9,12 +9,12 @@ import asyncio
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import SystemMessage, HumanMessage
 import re        
-from tools.lsie import _local_sku_intent_engine
-from tools.context_engine import filter_tags, vector_search
 from models.chatstate import AgentState
 from managers.uoc_manager import UOCManager
 from whatsapp.builder_out import whatsapp_output
 from database.uoc_crud import DatabaseCRUD
+from database._init_ import AsyncSessionLocal
+from database.procurement_crud import ProcurementCRUD
   # <-- Add this import, adjust path as needed
 load_dotenv()
 
@@ -405,12 +405,53 @@ Language: {user_lang}
 ]
     print("SiteOps Agent:::: new_user_flow : latest_response is set", state)
     return state
-
+ 
 
 async def handle_project_onboarding(state:AgentState,  crud: DatabaseCRUD, latest_response:str, uoc_next_message_extra_data= None) -> AgentState:
     uoc_last_called_by =  "siteops"
     uoc_mgr = UOCManager(crud)
     return await uoc_mgr.resolve_uoc(state,uoc_last_called_by)
+
+async def handle_project_overview(state:AgentState,  crud: DatabaseCRUD, latest_response:str, uoc_next_message_extra_data= None):
+        message=""" SiteOps Daily Pulse — ASM Elite Apartments (Stilt + G + 5 Floors)
+📍 Pratap Nagar, Kakinada, Andhra Pradesh
+
+Yesterday
+✅ Concreting completed — 2nd floor bathrooms
+✅ Masonry work started — 3rd floor
+
+ACTION NOW
+1️⃣ Crew Efficiency Alert — 1 crew member idle. 8 masons on Floor-2; productivity data shows 7 can complete the same scope. (Avoid ₹2,300/day idle cost)
+2️⃣ Cement Shortfall — Stock: 85 bags | Next pour: 120 bags. Short by 35 bags. 🧱 Order now
+
+Why this matters:
+Every insight here is AI-generated from your site logs, BOQ plans, and daily productivity patterns — so you act fast, save cost, and stay ahead."""
+        print("Siteops Agent:: Handle_project_overview:: ")
+        state["latest_respons"] = message
+        state["uoc_next_message_type"] = "button"
+        state["needs_clarification"]=True
+        state["uoc_next_message_type"]="procurement_new_user_flow"
+        state["agent_first_run"]=False
+        extra_data = [
+        {"id": "Order_materials", "title": "Order Cement"},
+        {"id": "main_menu", "title": "🏠 Main Menu"}
+    ]
+        sender_id= state.get("sender_id")
+        whatsapp_output(sender_id, message, message_type="button", extra_data=extra_data)
+        return state
+
+
+async def handle_order_materials(state:AgentState,  crud: DatabaseCRUD, latest_response:str, uoc_next_message_extra_data= None): 
+    state["messages"][-1]["content"] = "I need cement"
+    state["uoc_next_message_type"]="procurement_new_user_flow"
+    state["agent_first_run"]=True
+    state["image_path"]=""
+    async with AsyncSessionLocal() as session:
+            
+            crud = ProcurementCRUD(session)
+            from agents.procurement_agent import run_procurement_agent
+            return await run_procurement_agent(state, config={"configurable": {"crud": crud}})
+
 
 
 _HANDLER_MAP = {
@@ -419,7 +460,9 @@ _HANDLER_MAP = {
     #"credit": handle_credit,
     "main_menu": handle_main_menu,
     "micro_lesson": handle_micro_lesson,
-    "project_onboarding" : handle_project_onboarding
+    "project_onboarding" : handle_project_onboarding,
+    "project_overview": handle_project_overview,
+    "Order_materials": handle_order_materials
 }
 
 
@@ -470,7 +513,7 @@ async def new_user_flow(state: AgentState,latest_msg_intent:str, crud: DatabaseC
                 {"id": "procurement", "title": "⚡ Get Quotes"}, 
                 {"id": "credit", "title": "💳 Credit Options"},
             ]
- 
+  
             return state
         else:
             print("SiteOps Agent:::: run_siteops_agent : Last message/ Image is found")
@@ -504,6 +547,7 @@ async def new_user_flow(state: AgentState,latest_msg_intent:str, crud: DatabaseC
             state["uoc_next_message_extra_data"] = [
                 #{"id": "micro_lesson", "title": "ℹ Learn More"}, 
                 {"id": "project_onboarding", "title": "📁 Add to Project"},
+                {"id": "project_overview", "title": "Project Overview"},
                 {"id": "main_menu", "title": "🏠 Main Menu"}
             ]
             print("SiteOps Agent:::: run_siteops_agent : latest_response is set", state)
@@ -579,7 +623,7 @@ async def run_siteops_agent(state: AgentState, config: dict) -> AgentState:
     user_stage = state.get("user_stage", {})
     print("SiteOps Agent:::: run_siteops_agent : user_stage:", user_stage)
     
-
+    
     # because when we call the orchstrator it correctly extracts the inteded message,
     # but since this state is passed after an image analysis, the image pathis still found - 
     # what we are actually doing when her eis we are inculding this obtained message along with the image path -
@@ -614,3 +658,4 @@ async def run_siteops_agent(state: AgentState, config: dict) -> AgentState:
 
     state["agent_first_run"] = False
     return state
+  

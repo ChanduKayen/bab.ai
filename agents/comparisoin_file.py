@@ -1,614 +1,419 @@
+from datetime import datetime, date
+from sqlalchemy import (
+    ARRAY, Boolean, CheckConstraint, Column, Numeric, String, Text, Integer, BigInteger, ForeignKey, Date,
+    Enum, JSON, text, DateTime, UniqueConstraint, Float, Index)
+from sqlalchemy.orm import DeclarativeBase, Mapped, relationship, declarative_base
+from sqlalchemy.dialects.postgresql import UUID, JSONB
+from sqlalchemy.schema import MetaData
+from enum import Enum as PyEnum
+import uuid
 
 
-from fastapi import APIRouter, Request
-from orchastrator.core import builder_graph 
-import sys
-from fastapi.responses import PlainTextResponse
-import os
-from dotenv import load_dotenv
-from managers.uoc_manager import UOCManager
-router = APIRouter()
-from app.logging_config import logger
-import requests
-#import redis
-import asyncio  
-import random
-import json
-import agents.siteops_agent as siteops_agent
-from agents.random_agent import classify_and_respond
-from agents.procurement_agent import collect_procurement_details_interactively
-from whatsapp.builder_out import whatsapp_output
-from users.user_onboarding_manager import user_status
-from database._init_ import AsyncSessionLocal
-from database.uoc_crud import DatabaseCRUD
-from managers.uoc_manager import UOCManager
-from managers.project_intel import get_region_via_llm
-from managers.project_intel import TaskHandler
-# from users.user_onboarding_service import get_user, collect_user_details_interactively
-# from state_builder import set_new_user_onboarding_state, state_existing_user_state
+class Base(DeclarativeBase):
+    pass
 
-load_dotenv(override=True)
+Base = declarative_base(metadata=MetaData(schema="public"))
+# ---------- hierarchy -----------------------------------------------------
+class Project(Base):
+    __tablename__ = "projects"
 
-#This has to be updated accroding to he phone number you are using for the whatsapp business account.
-WHATSAPP_API_URL = "https://graph.facebook.com/v19.0/768446403009450/messages"
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    name = Column(String, nullable=False)
+    sender_id = Column(String, nullable=True)
+    location = Column(String, nullable=True)
+    no_of_blocks = Column(Integer, nullable=True)
+    floors_per_block = Column(Integer, nullable=True)
+    flats_per_floor = Column(Integer, nullable=True)
 
-#ACCESS_TOKEN = "EAAIMZBw8BqsgBO4ZAdqhSNYjSuupWb2dw5btXJ6zyLUGwOUE5s5okrJnL4o4m89b14KQyZCjZBZAN3yZBCRanqLC82m59bGe4Rd2BPfRe3A3pvGFZCTf2xB7a6insIzesPDVMLIw4gwlMkkz7NGl3ZBLvP5MU8i3mZBMmUBShGeQkSlAyRhsXJtlsg8uGaAfYwTid8PZAGBKnbOR3LFpCgBD8ZCIMJh9xI0sHWy"  
+    created_at = Column(DateTime, default=datetime.utcnow)
 
-ACCESS_TOKEN = os.getenv("WHATSAPP_ACCESS_TOKEN")
 
-# implementing a presistnace layer to preseve the chat history tha saves the state of messages for followup questions required by UOC manager 
-#r = redis.Redis(host='localhost', port=6379, decode_responses=True)
-memory_store = {}
+class Flat(Base):
+    __tablename__ = "flats"
+
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False)
+    block_name = Column(String, nullable=True)
+    floor_no = Column(Integer, nullable=False)
+    flat_no = Column(Integer, nullable=False)
+    bhk_type = Column(Text, nullable=False)
+    facing = Column(Text)
+    carpet_sft = Column(Integer)
+
+    project = relationship("Project", backref="flats")
+    regions = relationship("Region", back_populates="flat")
+
+    __table_args__ = (
+        UniqueConstraint('project_id', 'block_name', 'floor_no', 'flat_no', name='uq_flat_identity'),
+    )
+
+class Region(Base):
+    __tablename__ = "regions"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    full_id = Column(Text, unique=True)
+    code = Column(Text, nullable=False)
+    project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False)
+    flat_id = Column(BigInteger, ForeignKey("flats.id", ondelete="CASCADE"), nullable=True)
+    block_name = Column(Text, nullable=True)
+    floor_no = Column(BigInteger, nullable=True)
+    meta = Column(JSON)
+    flat = relationship("Flat", back_populates="regions")
+    project = relationship("Project", backref="regions")
  
+class Task(Base):
+    __tablename__ = "tasks"
 
-def get_state(sender_id: str): 
-    print("Webhook :::::: get_state::::: Getting state for sender_id:", sender_id)
-    return memory_store.get(sender_id)                      
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False)
+    region_id = Column(UUID(as_uuid=True), ForeignKey("regions.id", ondelete="SET NULL"))
     
-    # try: 
-    #     ############### Redis Connection Test ###############
-    #     ############### Uncomment for production ###############
-    #      r.ping()
-    #      print(" Redis connection successful")
-    # except redis.ConnectionError:
-    #     print(" Redis connection failed. Attempting to load state from backup.")
-    #     # Load state from backup or initialize a new state
-    #     return {
-    #         "sender_id": sender_id,   
-    #         "messages": [],
-    #         "agent_first_run": True,             
-    #         "needs_clarification": False,
-    #         "uoc_last_called_by": None, 
-    #         "uoc_confidence": "low",
-    #         "uoc": {},                           
-    #     }
-
-
-    # state_json = r.get(sender_id)
-    # try:
-    #     return json.loads(state_json) 
-    # except (TypeError, json.JSONDecodeError):
-    #     print("Failed to decode state for sender_id:", sender_id)
-    #     return {
-    #         "sender_id": sender_id,   
-    #         "messages": [],
-    #         "agent_first_run": True,             
-    #         "needs_clarification": False,
-    #         "uoc_last_called_by": None,
-    #         "uoc_confidence": "low",
-    #         "uoc": {},                           
-    #     }
+    task_type = Column(String, nullable=False)  # e.g., "Plastering", "Wiring"
+    status = Column(String, default="Not Started")  # "Not Started", "In Progress", "Done" → validate in Python
+    department = Column(String, nullable=True)
+    dynamic_vars = Column(JSON, default=dict)
     
+    created_at = Column(DateTime, default=datetime.utcnow)
 
-def save_state(sender_id:str, state:dict):
-    memory_store[sender_id] = state
-    print("Webhook :::::: save_state::::: State saved method called")
-    # r.set(sender_id, json.dumps(state), ex=3600)  # Setting the expiration time to 1 hour
+    project = relationship("Project", backref="tasks")
+    region = relationship("Region", backref="tasks")
+    jobs = relationship("Job", back_populates="task", cascade="all, delete-orphan")
 
-# def send_whatsapp_message(to_number: str, message_text: str):
-#     print("Sending message to WhatsApp:", to_number, message_text)
-#     headers = {
-#         "Authorization": f"Bearer {ACCESS_TOKEN}",
-#         "Content-Type": "application/json"
-#     }
-#     payload = {
-#         "messaging_product": "whatsapp",
-#         "to": to_number,
-#         "type": "text",
-#         "text": {"body": message_text}
-#     }
 
-#     response = requests.post(WHATSAPP_API_URL, headers=headers, json=payload)
-#     print(f"Sent message to {to_number}. Response:", response.status_code, response.text)
+class Job(Base):
+    __tablename__ = "jobs"
 
-logger.info("[STARTUP] webhook.py loaded successfully.")
-logger.info("Now testing the webhook route.")
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    task_id = Column(UUID(as_uuid=True), ForeignKey("tasks.id", ondelete="CASCADE"))
+    description = Column(Text)
+    material = Column(String)
+    worker = Column(String)
+    quality = Column(String)
+    time = Column(DateTime, default=datetime.utcnow)
+    confidence_flags = Column(JSON, default=dict)
+    raw_text = Column(Text)
 
-def download_whatsapp_image(media_id: str) -> str:
-    #Get media URL 
-    media_info_url = f"https://graph.facebook.com/v19.0/{media_id}"
-    headers = {"Authorization": f"Bearer {ACCESS_TOKEN}"}
-    print("Webhook :::::: download_whatsapp_image::::: Got media URL:",media_info_url)
-    res = requests.get(media_info_url, headers=headers)
+    task = relationship("Task", back_populates="jobs")
+
+
+class WorkerLog(Base):
+    __tablename__ = "worker_logs"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False)
+    task_id = Column(UUID(as_uuid=True), ForeignKey("tasks.id", ondelete="SET NULL"))
+
+    # Replaced Enum with String
+    gender = Column(String, nullable=False)  # "Male", "Female", "Other" → validate in Python
+    skill_type = Column(String, nullable=False)  # "Skilled", "Unskilled" → validate in Python
+    job_role = Column(String, nullable=False)  # e.g., Mason, Electrician
+    count = Column(Integer, nullable=False, default=1)
+    contractor_name = Column(String, nullable=True)
+
+    log_date = Column(Date, default=date.today)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    project = relationship("Project", backref="worker_logs")
+    task = relationship("Task", backref="worker_logs")
+
+class MaterialInventory(Base):
+    __tablename__ = "material_inventory"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+
+    project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False)
+
+    name = Column(String, nullable=False)                  # e.g., Cement
+    specification = Column(String, nullable=True)          # e.g., OPC 53 Grade
+    unit = Column(String, nullable=False)                  # e.g., bags, tons, sqft
+    quantity = Column(Integer, default=0)                  # current available quantity
+
+    updated_at = Column(DateTime, default=datetime.utcnow)
     
-    if res.status_code != 200:
-        print("Webhook :::::: download_whatsapp_image::::: Failed to get media URL:", res.text)
-        return None
+    project = relationship("Project", backref="material_inventory")
+class Material(Base):
+    __tablename__ = "materials"
 
-    media_url = res.json().get("url")
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    name = Column(String, nullable=False)
+    specification = Column(String)
+    unit = Column(String, nullable=False)
+    quantity_available = Column(Float, default=0.0)
+
+    logs = relationship("MaterialLog", back_populates="material", cascade="all, delete-orphan")
+
+class MaterialLog(Base):
+    __tablename__ = "material_logs"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False)
+    task_id = Column(UUID(as_uuid=True), ForeignKey("tasks.id", ondelete="SET NULL"))
+    material_id = Column(UUID(as_uuid=True), ForeignKey("materials.id", ondelete="SET NULL"))
+
+    change_type = Column(String, nullable=False)  # "Usage", "Refill", "Wastage" → validate in Python
+    quantity = Column(Float, nullable=False)
+    unit = Column(String, nullable=False)
+    description = Column(String, nullable=True)
+ 
+    log_date = Column(Date, default=date.today)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    project = relationship("Project", backref="material_logs")
+    task = relationship("Task", backref="material_logs")
+    material = relationship("Material", backref="material_logs")
+
+class RequestStatus(PyEnum):
+    DRAFT = "draft"
+    REQUESTED = "requested"
+    QUOTED = "quoted"
+    APPROVED = "approved"
+
+class MaterialRequest(Base):
+    __tablename__ = "material_requests"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"))
+    sender_id = Column(String, nullable=False)  # WhatsApp user ID
+    status = Column(Enum(RequestStatus), default=RequestStatus.DRAFT, nullable=False)  # draft / requested / quoted / approved
+    delivery_location = Column(String, nullable=True)
+    notes = Column(Text)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    expected_delivery_date = Column(Date, nullable=True)
+    user_editable = Column(Boolean, default=True)
     
-    #Downloading media content
-    image_data = requests.get(media_url, headers=headers).content
-    filename = f"C:/Users/vlaks/OneDrive/Documents/Bab.ai{media_id}.jpg"
+    items = relationship("MaterialRequestItem", back_populates="request", cascade="all, delete-orphan")
+    vendor_quote_items = relationship("VendorQuoteItem", back_populates="request", cascade="all, delete-orphan")
+
+class MaterialRequestItem(Base):
+    __tablename__ = "material_request_items"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    material_request_id = Column(UUID(as_uuid=True), ForeignKey("material_requests.id", ondelete="CASCADE"))
+    material_name = Column(String, nullable=False)
+    sub_type = Column(String, nullable=True)  # e.g., OPC 53 Grade
+    dimensions = Column(String, nullable=True)  # e.g., 20, 10, 50
+    dimension_units = Column(String, nullable=True)  # e.g., mm, kg
+    quantity = Column(Float, nullable=False)
+    quantity_units = Column(String, nullable=True)  # e.g., units, bags
+    unit_price = Column(Float, nullable=True)  # till vendor give a quote
+    status = Column(Enum(RequestStatus), default=RequestStatus.DRAFT, nullable=False)  # draft / requested / quoted / approved
+    vendor_notes = Column(Text, nullable=True)
+     
+    request = relationship("MaterialRequest", back_populates="items")
     
-    with open(filename, "wb") as f:
-        f.write(image_data)
+class MaterialCategory(PyEnum):
+    SITE_PREPARATION = "Site Preparation & Earthwork"
+    SAND_GRAVEL = "Sand & Gravel"
+    CEMENT_CONCRETE = "Cement & Concrete"
+    STEEL_TMT = "Steel (TMT Bars & Binding Wire)"
+    BRICKS_BLOCKS = "Bricks / AAC Blocks / Red Bricks"
+    AGGREGATE_STONE = "Stone Aggregate"
+    FOUNDATION_CHEMICALS = "Waterproofing & Anti-termite Chemicals"
+    SHUTTERING_FORMWORK = "Shuttering / Formwork"
+    MASONRY = "Masonry & Mortar"
+    SCAFFOLDING = "Scaffolding"
+    RCC_COMPONENTS = "RCC & Structural Components"
+    PLASTER = "Cement Plaster & Wall Putty"
+    POP = "POP & Surface Prep"
+    PLUMBING_PIPES = "Plumbing Pipes & Fittings"
+    SANITARY_FIXTURES = "Sanitary Fixtures"
+    WATER_STORAGE = "Water Tanks & Pumps"
+    ELECTRICAL_WIRING = "Electrical Wires & Cables"
+    SWITCHES_FIXTURES = "Switches & Lighting Fixtures"
+    DOORS_WINDOWS = "Doors, Windows & Grills"
+    FLOORING_TILES = "Flooring & Wall Tiles"
+    TILE_ADHESIVES = "Tile Adhesives & Grouts"
+    PAINTS = "Paints & Primers"
+    WOOD_POLISH = "Wood Polish & Varnish"
+    HVAC = "HVAC & Ventilation"
+    PLYWOOD = "Plywood, MDF, Laminates"
+    MODULAR_UNITS = "Modular Kitchen & Wardrobe Units"
+    FALSE_CEILING = "False Ceilings (Gypsum, POP)"
+    CLEANING_MATERIALS = "Cleaning & Handover Materials"
+    SAFETY_EQUIPMENT = "Safety Equipment"
+    SOLAR_SYSTEMS = "Solar Panels & Inverters"
+    ELEVATORS = "Elevators / Lifts"
+    SMART_HOME = "Smart Home Devices"
+    SECURITY_SYSTEMS = "Security & Surveillance"
+
+class Vendor(Base):
+    __tablename__ = 'vendors'
+
+    vendor_id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    name = Column(String, nullable=False)
+    phone_number = Column(String(15))
+    email = Column(String)
+    address = Column(String)
+    pincode = Column(String(10), nullable=False)
+    material_categories = Column(ARRAY(Enum(MaterialCategory)), nullable=False)
+    gst_number = Column(String(20))
+    rating = Column(Float)
+    active = Column(Boolean, default=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    vendor_quote_items= relationship("VendorQuoteItem", back_populates="vendor", cascade="all, delete-orphan")
     
-    print(f" Webhook :::::: download_whatsapp_image::::: Saved image to {filename}")
-    return filename 
-      
-async def run_agent_by_name(agent_name: str, state: dict) -> dict:
-    """
-    Routes the state to the correct agent based on the name.
-    """
-    if agent_name == "siteops":
-        from agents.siteops_agent import run_siteops_agent
-        return await run_siteops_agent(state)
-
-    elif agent_name == "procurement":
-        from agents.procurement_agent import run_procurement_agent
-        return await run_procurement_agent(state)
-
-    elif agent_name == "credit":
-        from agents.credit_agent import run_credit_agent
-        return await run_credit_agent(state)
-
-    else:
-        raise ValueError(f"Unknown agent name: {agent_name}")
+class UserCategory(PyEnum):
+    USER = "USER"
+    SUPERVISOR = "SUPERVISOR"
+    VENDOR = "VENDOR"
+    BUILDER = "BUILDER"
+    MANAGER = "MANAGER"
+    OWNER = "OWNER"
+    ADMIN = "ADMIN"
     
+class UserStage(PyEnum):
+    NEW = "new"
+    CURIOUS = "curious"
+    IDENTIFIED = "identified"
+    ENGAGED = "engaged"
+    TRUSTED = "trusted"
 
-@router.get("/webhook")
-async def verify(request: Request):
-    print("Webhook :::::: verify::::: GET /webhook called")
-    sys.stdout.flush()
-    params = dict(request.query_params)
+class User(Base):
+    __tablename__ = "users"
 
-    expected_token = "babai"
+    sender_id = Column(String, primary_key=True)
+    user_full_name = Column(String, nullable=False)
+    user_category = Column(Enum(UserCategory), default=UserCategory.USER)  # USER / SUPERVISOR / ADMIN
+    user_stage = Column(Enum(UserStage), default=UserStage.NEW)  # new / onboarding / active / inactive
+    user_identity = Column(String, nullable=True)  # e.g., phone number, email
+    credit_offer_pending = Column(Boolean, default=False)
+    user_actions = Column(ARRAY(String), default=list)  # e.g., ["asked_for_material_quote", "used_credit_feature"]
+    last_action_ts = Column(DateTime, default=datetime.utcnow)
+    user_score = Column(Integer, default=0)
 
-    if params.get("hub.verify_token") == expected_token:
-        return PlainTextResponse(params.get("hub.challenge", "0"))
-    
-    return PlainTextResponse("Invalid token", status_code=403)
+    _table_args_ = (UniqueConstraint('sender_id', name='uq_user_sender_id'),)
+class QuoteRequestVendor(Base):
+        __tablename__ = "quote_request_vendors"
 
+        quote_request_id = Column(UUID(as_uuid=True), ForeignKey("material_requests.id", ondelete="CASCADE"), primary_key=True)
+        vendor_id = Column(UUID(as_uuid=True), ForeignKey("vendors.vendor_id", ondelete="CASCADE"), primary_key=True)
 
-@router.post("/webhook")
-async def whatsapp_webhook(request: Request):
-    print("Webhook :::::: whatsapp_webhook::::: ####Webhook Called####")
-    
-    try:
-        logger.info("Entered Webhook route")
-        data = await request.json()
-        #msg = data["entry"][0]["changes"][0]["value"]["messages"][0]
-
-        entry = data["entry"][0]["changes"][0]["value"]
-        if "messages" not in entry:
-            logger.info("No messages found in the entry.")
-            return {"status": "ignored", "reason": "No messages found"}
-        msg = entry["messages"][0]
-
+class QuoteResponse(Base):
+        __tablename__ = "quote_responses"
         
-        print("Webhook :::::: whatsapp_webhook::::: Received message:", msg)
-        sender_id = msg["from"]
-        msg_type = msg["type"]
-        contacts = entry.get("contacts", [])
-        user_name = None
-        
-        if contacts and isinstance(contacts[0], dict):
-            profile = contacts[0].get("profile", {})
-            if isinstance(profile, dict):
-                user_name = profile.get("name")
-        print("Webhook :::::: whatsapp_webhook::::: usrname:", user_name)
-      
-        state = get_state(sender_id)  # Retrieve the state from Redis
-        #state["user_full_name"] = user_name  
-        user = user_status(sender_id, user_name)
-        user_stage = user["user_stage"]
-        
-        # if get_user(sender_id) is None:
-        #     state = state_builder.set_new_user_onboarding_state()
-        # else:
-        #     state = state_builder.set_existing_user_state(sender_id, msg_type, msg, user_name, user_stage)
+        id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+        quote_request_id = Column(UUID(as_uuid=True), ForeignKey("material_requests.id", ondelete="CASCADE"))
+        vendor_id = Column(UUID(as_uuid=True), ForeignKey("vendors.vendor_id", ondelete="CASCADE"), nullable=False)
+        material_name = Column(String, nullable=False)
+        specification = Column(String, nullable=True)
+        unit = Column(String, nullable=False)
+        price = Column(Float, nullable=False)
+        available_quantity = Column(Float, nullable=True)
+        notes = Column(Text, nullable=True)
+        created_at = Column(DateTime, default=datetime.utcnow)
+        vendor = relationship("Vendor")
 
-        if state is None:
-            state = {
-                "sender_id": sender_id,
-                "messages": [],  
-                "agent_first_run": True,             
-                "needs_clarification": False,
-                "uoc_last_called_by": None,
-                "uoc_confidence": "low",
-                "uoc": {}, 
-                "user_full_name": user_name,    
-                "user_stage": user_stage,    
-            }
-        else:
-            state["user_full_name"] = user_name
-            state["user_stage"] = user_stage  
-        if msg_type == "text":
-            text = msg["text"]["body"]
-            state["messages"].append({"role": "user", "content": text})
-            state["msg_type"] = "text"
+class QuoteStatus(PyEnum):
+    PENDING = "pending"
+    QUOTED = "quoted"
+    APPROVED = "approved"
+    REJECTED = "rejected"
+class VendorQuoteItem(Base):
+    __tablename__ = "vendor_quote_items"
 
-        elif msg_type == "image":
-            media_id = msg["image"]["id"]
-            caption = msg["image"].get("caption", "")
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
 
-            image_path = download_whatsapp_image(media_id)
-            print("Webhook :::::: whatsapp_webhook::::: Image downloaded, path:", image_path)
-            state["messages"].append({
-                "role": "user",
-                "content": f"[Image ID: {media_id}] {caption}"  # Or you could pass separately
-            })
-            state["media_id"] = media_id  
-            state["image_path"] = image_path  
-            state["caption"] = caption
-            state["msg_type"] = "image"
-            state["media_url"] = image_path
+    # Anchors
+    quote_request_id = Column(UUID(as_uuid=True), ForeignKey("material_requests.id", ondelete="CASCADE"), nullable=False)
+    request_item_id  = Column(UUID(as_uuid=True), ForeignKey("material_request_items.id", ondelete="CASCADE"), nullable=False)
+    vendor_id        = Column(UUID(as_uuid=True), ForeignKey("vendors.vendor_id", ondelete="CASCADE"), nullable=False)
 
-            print("Webhook :::::: whatsapp_webhook::::: Image downloaded and saved at:", image_path)
-        elif msg_type == "interactive":
-            interactive_type = msg["interactive"]["type"]
-            if interactive_type == "button_reply":
-                reply_id = msg["interactive"]["button_reply"]["id"]
-            elif interactive_type == "list_reply":
-                reply_id = msg["interactive"]["list_reply"]["id"]
-            else:
-                reply_id = "unknown_interactive"
-    
-            state["messages"].append({"role": "user", "content": reply_id})
-            state["msg_type"] = "interactive"
-            print(f"Webhook :::::: whatsapp_webhook::::: Captured interactive reply: {reply_id}")
+    # Vendor’s response
+    quoted_price  = Column(Float, nullable=False)     # numeric value
+    price_unit    = Column(String, nullable=False)    # e.g., "bag", "kg", "ton", "piece"
+    delivery_days = Column(Integer, nullable=True)    # e.g., 7 days
+    delivery_date = Column(Date, nullable=True)      # alternative exact date
+    comments      = Column(Text, nullable=True)       # vendor's comments or notes
+    status        = Column(Enum(QuoteStatus), default=RequestStatus.QUOTED, nullable=False)  # quoted / approved
 
-        elif msg_type == "document":
-            media_id  = msg["document"]["id"]
-            file_name = msg["document"].get("filename", "document")
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 
-            # Fetch download URL & metadata
-            meta_resp = requests.get(
-                f"https://graph.facebook.com/v19.0/{media_id}",
-                params={"access_token": ACCESS_TOKEN},
-                timeout=10,
-            )
+    __table_args__ = (
+        UniqueConstraint("quote_request_id", "vendor_id", "request_item_id", name="uq_vendor_quote_unique_line"),
+    )
 
-            if meta_resp.status_code != 200:
-                print("Webhook :::::: Failed to fetch document meta:", meta_resp.text)
-                return {"status": "ignored", "reason": "Cannot fetch document"}
-            
-            media_info = meta_resp.json()
-            media_url  = media_info.get("url")
-            mime_type  = media_info.get("mime_type", "")
-            
-            # Decide file type
-            file_type = "pdf" if mime_type == "application/pdf" else "document"
-
-            # Download the file
-            ext = ".pdf" if file_type == "pdf" else ".bin"
-            local_path = f"C:/Users/vlaks/OneDrive/Desktop/Bab.ai/{media_id}{ext}"
-            try:
-                file_data = requests.get(media_url, timeout=10).content
-                with open(local_path, "wb") as fp:
-                    fp.write(file_data)
-                print(f"Webhook :::::: Saved document to {local_path}")
-            except Exception as e:
-                print("Webhook :::::: Failed to download and save document:", e)
-                return {"status": "ignored", "reason": "Failed to download"}
-
-            # Try optional text extraction for PDFs
-            if file_type == "pdf":
-                try:
-                    import fitz  # PyMuPDF
-                    doc = fitz.open(local_path)
-                    pdf_text = "".join(page.get_text() for page in doc)
-                    doc.close()
-                    state["pdf_text"] = pdf_text
-                except Exception as e:
-                    print("Webhook :::::: PDF text extraction failed:", e)
-
-            # Add synthetic user message & metadata
-            state["messages"].append({
-                "role": "user",
-                "content": f"[Document ID: {media_id}] {file_name}"
-            })
-
-            state["media_id"] = media_id
-            state["file_name"] = file_name
-            state["msg_type"] = file_type
-            state["media_url"] = local_path
-        else:
-            return {"status": "ignored", "reason": f"Unsupported message type {msg_type}"}
+    # Relationships
+    request      = relationship("MaterialRequest", back_populates="vendor_quote_items")
+    request_item = relationship("MaterialRequestItem", backref="vendor_quotes")
+    vendor       = relationship("Vendor", back_populates="vendor_quote_items")
 
 
+# -------------------------------------------------------------------------
+# sku_master  (canonical product list)
+# -------------------------------------------------------------------------
+
+class SkuMaster(Base):
+    __tablename__ = "sku_master"
+
+    # Opaque ID (ULID/UUID acceptable). Using TEXT as per doc.
+    sku_id       = Column(String, primary_key=True)
+    brand        = Column(String, nullable=False)
+    category     = Column(String, nullable=False)    # e.g., tmt, cement, paint, tiles, wire
+
+    # Base UOM for normalized pricing (e.g., kg, L, m)
+    uom_code     = Column(String, nullable=False)
+
+    # Pack info (kept simple)
+    pack_qty     = Column(Numeric, nullable=False, default=1)
+    pack_uom     = Column(String, nullable=False, default="kg")
+
+    description  = Column(Text, nullable=True)
+
+    # Category-specific attributes (JSONB); index added below
+    attributes   = Column(JSONB, nullable=False)
+
+    # Identity string generated in app layer (e.g., lower(brand)|grade|size…)
+    canonical_key = Column(String, nullable=True)
+
+    # active | retired
+    status       = Column(String, nullable=False, default="active")
+    created_at   = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at   = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+    __table_args__ = (
+        Index("idx_sku_cankey", "canonical_key"),
+        Index("idx_sku_attrs", "attributes", postgresql_using="gin"),
+        CheckConstraint("status IN ('active','retired')", name="ck_sku_status"),
+    )
 
 
+# -------------------------------------------------------------------------
+# sku_vendor_price  (every vendor price row; append-only)
+# -------------------------------------------------------------------------
 
+class SkuVendorPrice(Base):
+    __tablename__ = "sku_vendor_price"
 
-        # we are checking what the message is about and whom to call - orchastrator or agent; we call orcha strator first and if the respone is regarding an ongoin converstainpn to gain more context intiated by agetns the respone is direclty routed to agetns insted of orchestrator
-        #result = await builder_graph.ainvoke(state)
-                # First message, go to orchestrator
-        # if not state.get("needs_clarification", False):
-        #     result = await builder_graph.ainvoke(state)
-        # The above flow has logic flaw becuase the followup question in set high by the uoc manager but this is interpreted as a frost time message and routed to orchestrated.
-        
-        #if not state.get("uoc_last_called_by") and state.get("needs_clarification", False):
-        print("Webhook :::::: whatsapp_webhook:::::  UOC pending question:", state.get("needs_clarification", False))
-        print("Webhook :::::: whatsapp_webhook::::: UOC last called by:", state.get("uoc_last_called_by", "unknown"))
+    # BIGSERIAL equivalent
+    id         = Column(BigInteger, primary_key=True, autoincrement=True)
 
-        # if  state.get("uoc_last_called_by") is None:  # checinkg it any agent called from uoc manager whic imokies it is a followup task 
-        #     print("Calling agent directly")
-        #     result = await builder_graph.ainvoke(state)
-            #state["uoc_last_called_by"] = result.get("agent_name", None)  # Set the agent name for future reference
-            #save_state(sender_id, result)  # Save the updated state back to Redis
-                 
-        # Agent returned with UOC pending
-        #if state.get("needs_clarification", False):
-        PROJECT_FORMATION_MESSAGES = [
-            "Okay.",
-            "Alright.",
-            "Got it.",
-            "Noted.",
-            "Understood.",
-            "Right.",
-            "Fine.",
-            "All right.",
-            "Clear.",
-            "Yes.",
-        ]
+    # FK to sku_master.sku_id (TEXT)
+    sku_id     = Column(String, ForeignKey("sku_master.sku_id", ondelete="CASCADE"), nullable=False)
 
-        PLAN_OR_DOC_MESSAGES = [
-            "No problem. Just answer a few quick questions — we’ll set up your project, and auto-link all future updates.",
-            "OKay! Let’s start from scratch — fast. A few simple answers now, and everything else will connect automatically.",
-            "That’s fine. You’ll be done in under a minute — we’ll match future updates to this project for you.",
-            "Sure, we work with whatever you’ve got. Just a few taps now — Bab.ai will keep everything neatly linked from here on.",
-        ]
+    # Use your existing vendors.vendor_id (UUID)
+    vendor_id  = Column(UUID(as_uuid=True), ForeignKey("vendors.vendor_id", ondelete="CASCADE"), nullable=False)
+    quoted_at  = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow)
 
-        PROJECT_SELECTION_MESSAGES = [
-            "🔍 Hold on... I’m figuring out which project you’re referring to.",
-            "📁 Let me check if this matches any existing projects.",
-            "🗂 Matching this conversation to the right project for context.",
-        ]
+    # Price normalized to sku_master.uom_code
+    price      = Column(Numeric, nullable=False)
+    currency   = Column(String, nullable=False, default="INR")
 
-        FIRST_TIME_MESSAGES = [
-            "Alright, let’s take a look.",
-            "Okay, I’m with you.",
-            "Sure, let's get started.",
-            "Got it. Let’s take the first step.",
-            "Alright. We'll go one thing at a time.",
-            "I’m here. Let’s begin.",
-            "Alright — starting simple.",
-            "Okay, let's figure this out together.",
-            "All good. Let me guide you from here.",
-            "That’s received. Let’s begin from the basics.",
-            "Okay, let’s make this easy.",
-            "Alright. Just need a small detail to begin.",
-            "Let’s start gently. One quick check first.",
-            "Thanks. I’ll take it from here.",
-            "Got it. Let’s just set the context right.",
-            "With you. Let’s start at the beginning.",
-            "Noted. I’ll guide you from here.",
-            "Okay, let’s get some clarity first.",
-            "Right, let’s set the ground.",
-            "Perfect. Let’s walk through it step by step.", 
-        ]
-        try:
-                async with AsyncSessionLocal() as session:
-                   crud = DatabaseCRUD(session)
-                   uoc_mgr = UOCManager(crud)
-                   task_handler = TaskHandler(crud)  # Initialize TaskHandler with the same CRUD instance
-                #    procurement_mgr = ProcurementManager(crud)
-                   #uoc_mgr = UOCManager()  # Instantiate the class
-        except Exception as e:
-                print("Webhook :::::: whatsapp_webhook::::: Error instantiating UOCManager:", e)
-                import traceback; traceback.print_exc()
-                return {"status": "error", "message": f"Failed to instantiate UOCManager: {e}"}
-       
-        if  state.get("needs_clarification") is True:  # checking if the uoc manager is pending a question to be answered by the user
-            print("Webhook :::::: whatsapp_webhook::::: <needs_clarification>::::: -- Figuring out which method in UOC managet to call, after the question initasked by UOC manager --", state["needs_clarification"])
-            q_type = state.get("uoc_question_type", "").strip().lower()
-            print("Webhook :::::: whatsapp_webhook::::: <uoc_question_type>::::: -- The set question type is --", repr(q_type))
-            
-            
-            if q_type == "onboarding":
-                    
-                    print("Webhook :::::: whatsapp_webhook::::: <pending_question True>::::: -- The set question type is random, so calling ??classify_and_respond?? --")
-                    try:
-                        async with AsyncSessionLocal() as session:
-                            crud = DatabaseCRUD(session)
-                            followups_state = await classify_and_respond(state, config={"configurable": {"crud": crud}})
-                    except Exception as e:
-                        print("Webhook :::::: whatsapp_webhook::::: Error calling classify_and_respond in onboarding:", e)
-            
-            if q_type == "user_onboarding":
-                print("Webhook :::::: whatsapp_webhook::::: <needs_clarification True>::::: <uoc_question_type>::::: -- The set question type is user_onboarding, so calling ??user_onboarding_manager.create_user_interactively?? --", state["uoc_question_type"])
-                try:
-                    followups_state = await create_user_interactively(state)
-                except Exception as e:
-                    print("Webhook :::::: whatsapp_webhook::::: Error calling create_user_interactively:", e)
-                    traceback.print_exc()
-            
-            elif q_type == "project_formation":
-                whatsapp_output(sender_id, random.choice(PROJECT_FORMATION_MESSAGES), message_type="plain")
-                print("Webhook :::::: whatsapp_webhook::::: <needs_clarification True>::::: <uoc_question_type>::::: -- The set question type is project_formation so calling ??collect_project_structure_interactively??  --", state["uoc_question_type"])
-                #print("State=====", state)
-                try:
-                    followups_state = await uoc_mgr.collect_project_structure_interactively(state)
-                except Exception as e:
-                    print("Webhook :::::: whatsapp_webhook::::: Error calling collect_project_structure_interactively:", e)
-                    traceback.print_exc()
-                
+    resolved   = Column(Boolean, nullable=False, default=False)   # true if unique match
+    quote_ref  = Column(String, nullable=True)                    # shared across ambiguous candidates
+    tag        = Column(Text, nullable=True)                      # free note, e.g., "TEMP — Vizag Fe550D 12mm (length ?)"
 
-            elif q_type == "has_plan_or_doc":
-                    file_url  = state.get("image_path") or state.get("file_local_path")
-                    file_type = state.get("msg_type")
+    pincode    = Column(String, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
-                    if file_url and file_type in ("image", "pdf", "document"):
-                        print("Webhook :::::: Detected plan upload —", file_type, file_url)
-                        try:
-                            followups_state = await uoc_mgr.process_plan_file(
-                                state, file_url, file_type
-                            )
-                        except Exception as e:
-                            print("Webhook :::::: process_plan_file failed:", e)
-                            followups_state = state
-                            followups_state.update(
-                                latest_respons=(
-                                    "Sorry, I couldn’t read that file. "
-                                    "Please try a clearer image or a PDF."
-                                ),
-                                needs_clarification=True,
-                            )
-                    else: 
-                        whatsapp_output(
-                            sender_id,
-                            random.choice(PLAN_OR_DOC_MESSAGES),
-                            message_type="plain",
-                        )
-                        print("Webhook :::::: Awaiting plan upload — sending gentle nudge.")
-                        followups_state = await uoc_mgr.collect_project_structure_with_priority_sources(state)
-            elif q_type == "project_selection":
-                # whatsapp_output(sender_id, random.choice(PROJECT_SELECTION_MESSAGES), message_type="plain")
-                # print("Webhook ::::::  whatsapp_webhook::::: <needs_clarification True>::::: <uoc_question_type>::::: -- The set question type is project_selection, so calling ??select_or_create_project??--", state["uoc_question_type"])
-                # followups_state = await uoc_mgr.select_or_create_project(state, None)
-                if msg.get("type") == "interactive" and msg["interactive"].get("type") == "button_reply":
-                    button_id = msg["interactive"]["button_reply"]["id"]
-                    button_title = msg["interactive"]["button_reply"]["title"]
-
-                    if button_id == "add_new":
-                        # Call your select_or_create_project flow
-                        followups_state = await uoc_mgr.select_or_create_project(state, None)
-                    else:
-                        followups_state = await task_handler.handle_job_update(state)
-            elif q_type == "task_region_identification":
-                followups_state = await get_region_via_llm(state)
-
-            elif q_type == "siteops_welcome":
-                print("Webhook :::::: whatsapp_webhook::::: <needs_clarification True>::::: <uoc_question_type>::::: -- The set question type is siteops_welcome, so calling ??siteops_agent.new_user_flow?? --", state["uoc_question_type"])
-                try:
-                    #followups_state = await siteops_agent.new_user_flow(state)
-                    #followups_state=await siteops_agent.run_siteops_agent(state)
-                    async with AsyncSessionLocal() as session:
-                       crud = DatabaseCRUD(session)
-                       followups_state = await siteops_agent.run_siteops_agent(state, config={"configurable": {"crud": crud}})
-                except Exception as e:
-                    print("Webhook :::::: whatsapp_webhook::::: Error calling siteops_agent.new_user_flow:", e)
-                    import traceback; traceback.print_exc()
-            
-            elif q_type == "procurement":
-                print("Webhook :::::: whatsapp_webhook::::: q_type = procurement :::: The set question type is procurement, so calling ??collect_procurement_details_interactively?? --", state["uoc_question_type"])
-                followups_state = await collect_procurement_details_interactively(state)
-                save_state(sender_id, followups_state)
-                response_msg = followups_state.get("latest_respons", "No response available.")
-                message_type = followups_state.get("uoc_next_message_type", "plain")
-                extra_data = followups_state.get("uoc_next_message_extra_data", None)
-                whatsapp_output(sender_id, response_msg, message_type=message_type, extra_data=extra_data)
-                return {"status": "done", "reply": response_msg}
-                # from managers.procurement_manager import ProcurementManager
-                # whatsapp_output(sender_id, "Let's start with procurement details. Please send the list of materials or upload a BOQ/photo.", message_type="plain")
-                # try:
-                #     async with AsyncSessionLocal() as session:
-                #         crud = DatabaseCRUD(session)
-                #         procurement_mgr = ProcurementManager(crud)
-                #         followups_state = await procurement_mgr.collect_procurement_details(state)
-                # except Exception as e:
-                #     print("Webhook :::::: whatsapp_webhook::::: Error calling collect_procurement_details:", e)
-                #     import traceback; traceback.print_exc()
-                #     followups_state = state
-                #     followups_state.update(
-                #         latest_respons="Sorry, there was an error processing your procurement details.",
-                #         needs_clarification=True,
-                #     )
-                # save_state(sender_id, followups_state)
-                # response_msg = followups_state.get("latest_respons", "No response available.")
-                # message_type = followups_state.get("uoc_next_message_type", "plain")
-                # extra_data = followups_state.get("uoc_next_message_extra_data", None)
-                # whatsapp_output(sender_id, response_msg, message_type=message_type, extra_data=extra_data)
-                # return {"status": "done", "reply": response_msg}
-
-            
-            else:
-                raise ValueError(f"Unknown uoc_question_type: {state['uoc_question_type']}")
-            
-        
-                #print("State after classify_and_respond=====", followups_state)
-            
-            if followups_state.get("needs_clarification") is False and followups_state.get("uoc_confidence") in ["high"]:
-                print("Webhook :::::: whatsapp_webhook::::: <needs_clarification True>::::: <needs_clarification>::::: -- UOC is now confident, calling the agent --")
-                agent_name = followups_state.get("uoc_last_called_by", "uknown")
-                result = await run_agent_by_name(agent_name, state)
-
-
-            #followups_state = await UOCManager.run(state, called_by=state.get("uoc_last_called_by", "unknown"))
-            try:
-                save_state(sender_id, followups_state)  # Save the updated state back to Redis
-            except Exception as e:
-                print("Webhook :::::: whatsapp_webhook::::: Error saving followups_state:", e)
-            print("Webhook :::::: whatsapp_webhook::::: -- Got result from the called agent, saved the state : --: ", followups_state)
-            response_msg= followups_state.get("latest_respons", "No response available.")
-            message_type= followups_state.get("uoc_next_message_type", "plain")
-            extra_data= followups_state.get("uoc_next_message_extra_data", None)
-            print("Webhook :::::: whatsapp_webhook::::: -- ******Sending message to whatsapp****** Attributes: -- ", message_type, extra_data)
-            whatsapp_output(sender_id, response_msg, message_type=message_type, extra_data=extra_data)
-    
-        # This is redundant because the uoc_confidence -> high state is handled in UOC manager and that state is sent to the agent directly. There wont be a response back to the user when the state is high. 
-        # elif  state.get("needs_clarification") is False and state.get("uoc_confidence") in ["High"]:
-        #      # UOC is now confident, resume agent
-        #     agent_name = state.get("uoc_last_called_by", "unknown")
-        #     result = await run_agent_by_name(agent_name, state) 
-
-# UOC is now confident, resume the originally intended agent.
-# No need to go back to orchestrator (builder_graph) — decision was made earlier.
-#The main question may arise from the lack of clairty of who owns the control flow and the return path?  - Which is now addressed by the above code.
-           
-        elif state.get("needs_clarification") is False:
-            print("Webhook :::::: whatsapp_webhook::::: <needs_clarification False>:::::  -- Calling orchestrator, this is a first time message --")
-            #whatsapp_output(sender_id, random.choice(FIRST_TI ME_MESSAGES), message_type="plain")
-            state["user_full_name"] = user_name  # Update the user's full name in the state
-            #result = await builder_graph.ainvoke(state)
-            
-            print("Calling builder_graph:", builder_graph)
-            print("Type of builder_graph:", type(builder_graph))
-            #PassingDB Session as a  contextwrapper to Langgraph; dont send crud in a state, it break the serialization. 
-            # async with AsyncSessionLocal() as session:
-            #  crud = DatabaseCRUD(session)
-            result = await builder_graph.ainvoke(input=state, config={"crud": crud})
-
-
-
-            save_state(sender_id, result)
-            print("Webhook :::::: whatsapp_webhook::::: <needs_clarification False>:::::  -- Got result from the Orchestrator, saved the state : --", get_state(sender_id))
-            # print("result after saving in condition ", result)
-        # Send final reply
-        #response_msg = state["latest_response"] if "latest_response" in state else "No response available."
-        #response_msg = result["messages"][-1]["content"] if "messages" in result else "No response available."
-        response_msg= result.get("latest_respons", "No response available.")
-        message_type= result.get("uoc_next_message_type", "plain")
-        extra_data= result.get("uoc_next_message_extra_data", None)
-        print("Webhook :::::: whatsapp_webhook:::::-- ******Sending message to whatsapp****** Attributes :", message_type, extra_data)
-        whatsapp_output(sender_id, response_msg, message_type=message_type, extra_data=extra_data)
-        logger.info("Final response sent to WhatsApp")
-        return {"status": "done", "reply": response_msg}
-    
-       
-    except Exception as e:
-        logger.error("Error in WhatsApp webhook:{e}")
-        #logger.error(e, exc_info=True)
-        return {"status": "error", "message": str(e)}
-
-# @router.get("/webhook/material")
-# async def get_materials_by_sender(request: Request):
-#     """
-#     Get all materials for a given project.
-#     """
-#     try:
-#         data = await request.json()
-#         #msg = data["entry"][0]["changes"][0]["value"]["messages"][0]
-
-#         entry = data["entry"][0]["changes"][0]["value"]
-#         print("Webhook :::::: get_materials_by_sender::::: entry:", entry)
-#         if "messages" not in entry:
-#             logger.info("No messages found in the entry.")
-#             return {"status": "ignored", "reason": "No messages found"}
-#         msg = entry["messages"][0]
-
-        
-#         print("Webhook :::::: get_materials_by_sender::::: Received message:", msg)
-#         sender_id = msg["from"]
-#         print("Webhook :::::: get_materials_by_sender::::: sender_id:", sender_id)
-#         state = get_state(sender_id)
-#         print("Webhook :::::: get_materials_by_sender::::: material state received:", state)
-#         return {"status": "success", "materials": [material.to_dict() for material in state.get("procurement_details", {}).get("materials", [])]}
-#     except Exception as e:
-#         logger.error(f"Error fetching materials for project {sender_id}: {e}")
-#         return {"status": "error", "message": str(e)}
-
-
-
+    __table_args__ = (
+        # Prevent dupes for the same ambiguous line
+        UniqueConstraint("vendor_id", "quote_ref", "sku_id", name="uq_vendor_quote_sku"),
+        Index("idx_svp_vendor_sku", "vendor_id", "sku_id"),
+        Index("idx_svp_resolved", "resolved"),
+        Index("idx_svp_sku_resolved", "sku_id", "resolved"),
+        Index("idx_svp_quoted_at", "quoted_at"),
+    )

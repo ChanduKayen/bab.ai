@@ -1,9 +1,9 @@
-from typing import TypedDict, List, Optional
+from typing import TypedDict, List, Optional 
 
-
+ 
 class AgentState(TypedDict):
     user_full_name: Optional[str]
-    user_stage: Optional[str]
+    user_stage: Optional[str] 
     insights: Optional[List[dict]]
     messages: List[dict]
     sender_id: str
@@ -22,7 +22,7 @@ class AgentState(TypedDict):
     uoc: Optional[dict]
     context: Optional[str]
     uoc_next_message_type: Optional[str]
-    uoc_next_message_extra_data: Optional[List[dict]]
+    uoc_next_message_extra_data: Optional[List[dict]] 
     latest_respons: Optional[str]
     project_setup_mode: Optional[bool]    
     project_structure: Optional[dict]     
@@ -33,3 +33,7 @@ class AgentState(TypedDict):
     task_id: Optional[str]
     active_material_request_id: Optional[str]         
     procurement_details: Optional[dict]
+    credit_profile: Optional[dict]
+    intent_context:Optional[str]
+    last_known_intent:Optional[str]
+    #credit_id:Optional[str]   

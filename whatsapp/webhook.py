@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Request, Depends, Request
 from agents import procurement_agent
 from orchastrator.core import builder_graph 
 import sys 
@@ -6,9 +6,15 @@ from fastapi.responses import PlainTextResponse
 import os
 from dotenv import load_dotenv
 from managers.uoc_manager import UOCManager
+import logging
 router = APIRouter()
 from app.logging_config import logger
 import requests
+
+# Load environment variables
+load_dotenv()
+APP_SECRET = os.getenv("APP_SECRET", None)
+VERIFY_TOKEN = os.getenv("VERIFY_TOKEN", "babai")  # Set your verify token here or via environment variable
 #import redis
 import asyncio  
 import random
@@ -16,14 +22,23 @@ import json
 import agents.siteops_agent as siteops_agent
 from agents.random_agent import classify_and_respond
 from agents.procurement_agent import collect_procurement_details_interactively
+from agents import credit_agent
 from whatsapp.builder_out import whatsapp_output
 from users.user_onboarding_manager import user_status
 from database._init_ import AsyncSessionLocal
 from database.uoc_crud import DatabaseCRUD
 from managers.uoc_manager import UOCManager
 from managers.project_intel import TaskHandler
-
-load_dotenv(override=True)
+import os, time, json, hashlib
+import hmac
+from sqlalchemy import text
+from sqlalchemy.ext.asyncio import AsyncSession
+from fastapi import BackgroundTasks
+from fastapi.responses import Response
+import json
+from hashlib import sha256
+from app.db import get_session
+from database.whatsapp_crud import first_time_event
 
 #This has to be updated according to he phone number you are using for the whatsapp business account.
 WHATSAPP_API_URL = "https://graph.facebook.com/v19.0/712076848650669/messages"
@@ -144,25 +159,52 @@ async def run_agent_by_name(agent_name: str, state: dict) -> dict:
 
 @router.get("/webhook")
 async def verify(request: Request):
-    print("Webhook :::::: verify::::: GET /webhook called")
-    sys.stdout.flush()
-    params = dict(request.query_params)
+    q = request.query_params
+    VERIFY_TOKEN = "babai"
+    if q.get("hub.mode") == "subscribe" and q.get("hub.verify_token") == VERIFY_TOKEN:
+        return PlainTextResponse(q.get("hub.challenge", "0"))
+    return PlainTextResponse("Invalid token", status_code=403)  
 
-    expected_token = "babai"
+# @router.get("/webhook")
+# async def verify(request: Request):
+#     print("Webhook :::::: verify::::: GET /webhook called")
+#     sys.stdout.flush()
+#     params = dict(request.query_params)
 
-    if params.get("hub.verify_token") == expected_token:
-        return PlainTextResponse(params.get("hub.challenge", "0"))
+#     expected_token = "babai"
+
+#     if params.get("hub.verify_token") == expected_token:
+#         return PlainTextResponse(params.get("hub.challenge", "0"))
     
-    return PlainTextResponse("Invalid token", status_code=403)
+#     return PlainTextResponse("Invalid token", status_code=403)
 
 
-@router.post("/webhook")
-async def whatsapp_webhook(request: Request):
-    print("Webhook :::::: whatsapp_webhook::::: ####Webhook Called####")
-    
+# #(SQLAlchemy) Helper
+# async def first_time_event(event_id: str) -> bool:
+#     """
+#     True  -> first time (inserted)
+#     False -> duplicate (conflict)
+#     """
+#     q = text("""
+#         INSERT INTO whatsapp_events (event_id)
+#         VALUES (:eid)
+#         ON CONFLICT DO NOTHING
+#         RETURNING 1
+#     """)
+#     print("Recording First event-----------")
+#     async with AsyncSessionLocal() as session:
+#         res = await session.execute(q, {"eid": event_id})
+#         await session.commit()
+#         return res.scalar() == 1
+def extract_event_id(payload: dict) -> str:
+    try:
+        return payload["entry"][0]["changes"][0]["value"]["messages"][0]["id"]
+    except Exception:
+        return sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
+async def handle_whatsapp_event(data: dict):
     try:
         logger.info("Entered Webhook route")
-        data = await request.json()
+        #data = await request.json()
         #msg = data["entry"][0]["changes"][0]["value"]["messages"][0]
 
         entry = data["entry"][0]["changes"][0]["value"]
@@ -464,7 +506,7 @@ async def whatsapp_webhook(request: Request):
                     followups_state.update(
                         latest_respons="Sorry, I couldn't determine the region. Please try again.",
                         needs_clarification=True,
-                    )
+                    ) 
             
             elif q_type == "siteops_welcome":
                 print("Webhook :::::: whatsapp_webhook::::: <needs_clarification True>::::: <uoc_question_type>::::: -- The set question type is siteops_welcome, so calling ??siteops_agent.new_user_flow?? --", state["uoc_question_type"])
@@ -485,18 +527,60 @@ async def whatsapp_webhook(request: Request):
                 response_msg = followups_state.get("latest_respons", "No response available.")
                 message_type = followups_state.get("uoc_next_message_type", "plain")
                 extra_data = followups_state.get("uoc_next_message_extra_data", None)
-                whatsapp_output(sender_id, response_msg, message_type=message_type, extra_data=extra_data)
+                #whatsapp_output(sender_id, response_msg, message_type=message_type, extra_data=extra_data)
                 return {"status": "done", "reply": response_msg}
                
             elif q_type== "procurement_new_user_flow":
-                print("Webhook :::::: whatsapp_webhook::::: q_type = procurement_new_user_flow :::: The set question type is procurement_new_user_flow, so calling ??procurement_agent.new_user_flow?? --", state["uoc_question_type"])
+                print("Webhook :::::: whatsapp_webhook::::: q_type = procurement_new_user_flow :::: The set question type is procurement_new_user_flow, so calling ??procurement_agent.run_procurement_agent?? --", state["uoc_question_type"])
                 followups_state = await procurement_agent.run_procurement_agent(state, config={"configurable": {"crud": crud}})
-               
+
+            elif q_type == "credit_start": 
+                print("Webhook :::::: whatsapp_webhook::::: <needs_clarification True>::::: <uoc_question_type>::::: -- The set question type is credit_onboard_start, so calling ??credit_agent.run_credit_agent?? --", state["uoc_question_type"])
+                try:
+                    followups_state = await credit_agent.run_credit_agent(state, config={"configurable": {"crud": crud}})
+                except Exception as e:
+                    print("Webhook :::::: whatsapp_webhook::::: Error calling credit_agent.run_credit_agent:", e)
+                    import traceback; traceback.print_exc()
+            
+            elif q_type == "credit_onboard_aadhaar":
+                print("Webhook :::::: whatsapp_webhook::::: <needs_clarification True>::::: <uoc_question_type>::::: -- The set question type is credit_onboard_aadhaar, so calling ??credit_agent.handle_collect_aadhaar?? --", state["uoc_question_type"])
+                try:
+                    followups_state = await credit_agent.handle_collect_aadhaar(state)
+                except Exception as e:
+                    print("Webhook :::::: whatsapp_webhook::::: Error calling credit_agent.handle_collect_aadhaar:", e)
+                    import traceback; traceback.print_exc()
+            elif q_type == "credit_onboard_pan":
+                print("Webhook :::::: whatsapp_webhook::::: <needs_clarification True>::::: <uoc_question_type>::::: -- The set question type is credit_onboard_pan, so calling ??credit_agent.handle_collect_pan?? --", state["uoc_question_type"])
+                try:
+                    followups_state = await credit_agent.handle_collect_pan(state)
+                except Exception as e:
+                    print("Webhook :::::: whatsapp_webhook::::: Error calling credit_agent.handle_collect_pan:", e)
+                    import traceback; traceback.print_exc()
+            elif q_type == "credit_onboard_gst":
+                print("Webhook :::::: whatsapp_webhook::::: <needs_clarification True>::::: <uoc_question_type>::::: -- The set question type is credit_onboard_gst, so calling ??credit_agent.handle_collect_gst?? --", state["uoc_question_type"])
+                try:
+                    followups_state = await credit_agent.handle_collect_gst(state)
+                except Exception as e:
+                    print("Webhook :::::: whatsapp_webhook::::: Error calling credit_agent.handle_collect_gst:", e)
+                    import traceback; traceback.print_exc()
+            elif q_type =="credit_onboard_consent":
+                print("Webhook :::::: whatsapp_webhook::::: <needs_clarification True>::::: <uoc_question_type>::::: -- The set question type is credit_onboard_consent, so calling ??credit_agent.handle_collect_consent?? --", state["uoc_question_type"])
+                try:
+                    followups_state = await credit_agent.handle_collect_consent(state)
+                except Exception as e:
+                    print("Webhook :::::: whatsapp_webhook::::: Error calling credit_agent.handle_collect_consent:", e)
+                    import traceback; traceback.print_exc()
+            elif q_type=="credit_status_check":
+                print("Webhook :::::: whatsapp_webhook::::: <needs_clarification True>::::: <uoc_question_type>::::: -- The set question type is credit_status_check, so calling ??credit_agent.handle_credit_status_check?? --", state["uoc_question_type"])
+                try:
+                    followups_state = await credit_agent.handle_poll_approval(state)
+                except Exception as e:
+                    print("Webhook :::::: whatsapp_webhook::::: Error calling credit_agent.handle_credit_status_check:", e)
+                    import traceback; traceback.print_exc()
             else:
                 raise ValueError(f"Unknown uoc_question_type: {state['uoc_question_type']}")
-            
-        
-                #print("State after classify_and_respond=====", followups_state)
+
+        #print("State after classify_and_respond=====", followups_state)
             
             if followups_state.get("needs_clarification") is False and followups_state.get("uoc_confidence") in ["high"]:
                 print("Webhook :::::: whatsapp_webhook::::: <needs_clarification True>::::: <needs_clarification>::::: -- UOC is now confident, calling the agent --")
@@ -512,7 +596,7 @@ async def whatsapp_webhook(request: Request):
             extra_data= followups_state.get("uoc_next_message_extra_data", None)
             print("Webhook :::::: whatsapp_webhook::::: -- ******Sending message to whatsapp****** Attributes: -- ", message_type, extra_data)
             whatsapp_output(sender_id, response_msg, message_type=message_type, extra_data=extra_data)
-    
+     
         # This is redundant because the uoc_confidence -> high state is handled in UOC manager and that state is sent to the agent directly. There wont be a response back to the user when the state is high. 
         # elif  state.get("needs_clarification") is False and state.get("uoc_confidence") in ["High"]:
         #      # UOC is now confident, resume agent
@@ -535,7 +619,7 @@ async def whatsapp_webhook(request: Request):
             async with AsyncSessionLocal() as session:
              crud = DatabaseCRUD(session)
              result = await builder_graph.ainvoke(input=state, config={"crud": crud})
-
+             
  
 
             save_state(sender_id, result)
@@ -560,3 +644,59 @@ async def whatsapp_webhook(request: Request):
         logger.error("Error in WhatsApp webhook:{e}")
         #logger.error(e, exc_info=True)
         return {"status": "error", "message": str(e)}
+
+# @router.get("/webhook")
+# async def verify(request: Request):
+#     q = request.query_params
+#     if q.get("hub.mode") == "subscribe" and q.get("hub.verify_token") == "babai":
+#         return PlainTextResponse(q.get("hub.challenge", "0"))
+#     return PlainTextResponse("Invalid token", status_code=403)
+
+# router = APIRouter(prefix="/whatsapp", tags=["whatsapp"])
+
+@router.post("/webhook")
+async def whatsapp_webhook(
+    request: Request,
+    session: AsyncSession = Depends(get_session),
+):
+    print("Webhook :::::: whatsapp_webhook::::: ####Webhook Called####")
+
+    # Parse body safely
+    try:
+        data = await request.json()
+        print("Webhook :::::: whatsapp_webhook::::: data", data)
+    except Exception:
+        try:
+            data = json.loads((await request.body()) or b"{}")
+        except Exception:
+            return PlainTextResponse("OK", status_code=200)
+
+    eid = extract_event_id(data)
+    if not eid:
+        return PlainTextResponse("OK", status_code=200)
+
+    try:
+        print("Webhook :::::: whatsapp_webhook::::: Calling First time event")
+        is_first = await first_time_event(session, eid)
+    except Exception:
+        logging.exception("first_time_event failed")
+        return PlainTextResponse("OK", status_code=200)
+
+    if not is_first:
+        print("Duplicate/Noise - 200 OK")
+        return PlainTextResponse("OK", status_code=200)
+
+    entry = data.get("entry", [{}])[0].get("changes", [{}])[0].get("value", {})
+    if not entry.get("messages"):
+        print("Statuses/Noise - 200 OK")
+        return PlainTextResponse("OK", status_code=200)
+
+    # schedule async work on the running loop
+    asyncio.create_task(_safe_handle_whatsapp_event(data))
+    return PlainTextResponse("OK", status_code=200)
+
+async def _safe_handle_whatsapp_event(payload: dict):
+    try:
+        await handle_whatsapp_event(payload)  # <-- your async worker
+    except Exception:
+        logging.exception("handle_whatsapp_event failed")
