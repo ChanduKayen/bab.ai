@@ -631,14 +631,14 @@ async def handle_whatsapp_event(data: dict):
         #logger.error(e, exc_info=True)
         return {"status": "error", "message": str(e)}
 
-@router.get("/webhook")
-async def verify(request: Request):
-    q = request.query_params
-    if q.get("hub.mode") == "subscribe" and q.get("hub.verify_token") == "babai":
-        return PlainTextResponse(q.get("hub.challenge", "0"))
-    return PlainTextResponse("Invalid token", status_code=403)
+# @router.get("/webhook")
+# async def verify(request: Request):
+#     q = request.query_params
+#     if q.get("hub.mode") == "subscribe" and q.get("hub.verify_token") == "babai":
+#         return PlainTextResponse(q.get("hub.challenge", "0"))
+#     return PlainTextResponse("Invalid token", status_code=403)
 
-router = APIRouter(prefix="/whatsapp", tags=["whatsapp"])
+# router = APIRouter(prefix="/whatsapp", tags=["whatsapp"])
 
 @router.post("/webhook")
 async def whatsapp_webhook(

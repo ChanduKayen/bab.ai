@@ -4,7 +4,7 @@ from sqlalchemy.orm import DeclarativeBase
 from sqlalchemy import MetaData
 from .config import Settings, get_db_url  # your existing config
 
-settings = Settings()
+settings = Settings() 
 DATABASE_URL = get_db_url(settings)
 # NOTE: if the password has '@', encode it: '@' -> %40
 
