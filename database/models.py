@@ -2,9 +2,9 @@
 from datetime import datetime, date
 from sqlalchemy import (
     ARRAY, Boolean, Column, String, Text, Integer, BigInteger, ForeignKey, Date, 
-    Index, Enum, JSON, text, DateTime, UniqueConstraint, Float)
+    Index, Enum, JSON, text, DateTime, UniqueConstraint, Float, Numeric, CheckConstraint)
 from sqlalchemy.orm import DeclarativeBase, Mapped, relationship, declarative_base, mapped_column
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.schema import MetaData
 from enum import Enum as PyEnum
 import uuid
@@ -342,44 +342,118 @@ class QuoteResponse(Base):
         created_at = Column(DateTime, default=datetime.utcnow)
         vendor = relationship("Vendor")
 
+class QuoteStatus(PyEnum):
+    PENDING = "pending"
+    QUOTED = "quoted"
+    APPROVED = "approved"
+    REJECTED = "rejected"
 class VendorQuoteItem(Base):
     __tablename__ = "vendor_quote_items"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    # header-level pointer to the request this vendor is quoting against
-    quote_request_id = Column(
-        UUID(as_uuid=True),
-        ForeignKey("public.material_requests.id", ondelete="CASCADE"),
-        nullable=False,
-    )
-    # the specific line item being quoted
-    material_request_item_id = Column(
-        UUID(as_uuid=True),
-        ForeignKey("public.material_request_items.id", ondelete="CASCADE"),
-        nullable=False,
-    )
-    # who is quoting
-    vendor_id = Column(
-        UUID(as_uuid=True),
-        ForeignKey("public.vendors.vendor_id", ondelete="CASCADE"),
-        nullable=False,
-    )
-    material_name = Column(String, nullable=False)
-    quoted_price = Column(Float, nullable=False)
-    comments = Column(Text, nullable=True)
 
-    request = relationship("MaterialRequest", back_populates="vendor_quote_items")
-    vendor = relationship("Vendor", back_populates="vendor_quote_items")
+    # Anchors
+    quote_request_id = Column(UUID(as_uuid=True), ForeignKey("material_requests.id", ondelete="CASCADE"), nullable=False)
+    request_item_id  = Column(UUID(as_uuid=True), ForeignKey("material_request_items.id", ondelete="CASCADE"), nullable=False)
+    vendor_id        = Column(UUID(as_uuid=True), ForeignKey("vendors.vendor_id", ondelete="CASCADE"), nullable=False)
 
-    # relationships (bidirectional, explicit)
-    request = relationship("MaterialRequest", back_populates="vendor_quote_items")
-    material_request_item = relationship("MaterialRequestItem", back_populates="vendor_quote_items")
-    vendor = relationship("Vendor", back_populates="vendor_quote_items")
+    # Vendor’s response
+    quoted_price  = Column(Float, nullable=False)     # numeric value
+    price_unit    = Column(String, nullable=False)    # e.g., "bag", "kg", "ton", "piece"
+    delivery_days = Column(Integer, nullable=True)    # e.g., 7 days
+    delivery_date = Column(Date, nullable=True)      # alternative exact date
+    comments      = Column(Text, nullable=True)       # vendor's comments or notes
+    status        = Column(Enum(QuoteStatus), default=RequestStatus.QUOTED, nullable=False)  # quoted / approved
+
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 
     __table_args__ = (
-        Index("ix_vqi_request_vendor", "quote_request_id", "vendor_id"),
-        Index("ix_vqi_item_id", "material_request_item_id"),
+        UniqueConstraint("quote_request_id", "vendor_id", "request_item_id", name="uq_vendor_quote_unique_line"),
     )
+
+    # Relationships
+    request      = relationship("MaterialRequest", back_populates="vendor_quote_items")
+    request_item = relationship("MaterialRequestItem", backref="vendor_quotes")
+    vendor       = relationship("Vendor", back_populates="vendor_quote_items")
+
+
+# -------------------------------------------------------------------------
+# sku_master  (canonical product list)
+# -------------------------------------------------------------------------
+
+class SkuMaster(Base):
+    __tablename__ = "sku_master"
+
+    # Opaque ID (ULID/UUID acceptable). Using TEXT as per doc.
+    sku_id       = Column(String, primary_key=True)
+    brand        = Column(String, nullable=False)
+    category     = Column(String, nullable=False)    # e.g., tmt, cement, paint, tiles, wire
+
+    # Base UOM for normalized pricing (e.g., kg, L, m)
+    uom_code     = Column(String, nullable=False)
+
+    # Pack info (kept simple)
+    pack_qty     = Column(Numeric, nullable=False, default=1)
+    pack_uom     = Column(String, nullable=False, default="kg")
+
+    description  = Column(Text, nullable=True)
+
+    # Category-specific attributes (JSONB); index added below
+    attributes   = Column(JSONB, nullable=False)
+
+    # Identity string generated in app layer (e.g., lower(brand)|grade|size…)
+    canonical_key = Column(String, nullable=True)
+
+    # active | retired
+    status       = Column(String, nullable=False, default="active")
+    created_at   = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at   = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+    __table_args__ = (
+        Index("idx_sku_cankey", "canonical_key"),
+        Index("idx_sku_attrs", "attributes", postgresql_using="gin"),
+        CheckConstraint("status IN ('active','retired')", name="ck_sku_status"),
+    )
+
+
+# -------------------------------------------------------------------------
+# sku_vendor_price  (every vendor price row; append-only)
+# -------------------------------------------------------------------------
+
+class SkuVendorPrice(Base):
+    __tablename__ = "sku_vendor_price"
+
+    # BIGSERIAL equivalent
+    id         = Column(BigInteger, primary_key=True, autoincrement=True)
+
+    # FK to sku_master.sku_id (TEXT)
+    sku_id     = Column(String, ForeignKey("sku_master.sku_id", ondelete="CASCADE"), nullable=False)
+
+    # Use your existing vendors.vendor_id (UUID)
+    vendor_id  = Column(UUID(as_uuid=True), ForeignKey("vendors.vendor_id", ondelete="CASCADE"), nullable=False)
+    quoted_at  = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow)
+
+    # Price normalized to sku_master.uom_code
+    price      = Column(Numeric, nullable=False)
+    currency   = Column(String, nullable=False, default="INR")
+
+    resolved   = Column(Boolean, nullable=False, default=False)   # true if unique match
+    quote_ref  = Column(String, nullable=True)                    # shared across ambiguous candidates
+    tag        = Column(Text, nullable=True)                      # free note, e.g., "TEMP — Vizag Fe550D 12mm (length ?)"
+
+    pincode    = Column(String, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    __table_args__ = (
+        # Prevent dupes for the same ambiguous line
+        UniqueConstraint("vendor_id", "quote_ref", "sku_id", name="uq_vendor_quote_sku"),
+        Index("idx_svp_vendor_sku", "vendor_id", "sku_id"),
+        Index("idx_svp_resolved", "resolved"),
+        Index("idx_svp_sku_resolved", "sku_id", "resolved"),
+        Index("idx_svp_quoted_at", "quoted_at"),
+    )
+# -------------------------------------------------------------------------
 
 class CreditStatus(PyEnum):
     PENDING = "pending"
