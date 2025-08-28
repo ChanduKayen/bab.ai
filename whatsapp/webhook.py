@@ -10,6 +10,11 @@ import logging
 router = APIRouter()
 from app.logging_config import logger
 import requests
+
+# Load environment variables
+load_dotenv()
+APP_SECRET = os.getenv("APP_SECRET", None)
+VERIFY_TOKEN = os.getenv("VERIFY_TOKEN", "babai")  # Set your verify token here or via environment variable
 #import redis
 import asyncio  
 import random
@@ -25,6 +30,7 @@ from database.uoc_crud import DatabaseCRUD
 from managers.uoc_manager import UOCManager
 from managers.project_intel import TaskHandler
 import os, time, json, hashlib
+import hmac
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 from fastapi import BackgroundTasks
@@ -153,16 +159,23 @@ async def run_agent_by_name(agent_name: str, state: dict) -> dict:
 
 @router.get("/webhook")
 async def verify(request: Request):
-    print("Webhook :::::: verify::::: GET /webhook called")
-    sys.stdout.flush()
-    params = dict(request.query_params)
+    q = request.query_params
+    if q.get("hub.mode") == "subscribe" and q.get("hub.verify_token") == VERIFY_TOKEN:
+        return PlainTextResponse(q.get("hub.challenge", "0"))
+    return PlainTextResponse("Invalid token", status_code=403)  
 
-    expected_token = "babai"
+# @router.get("/webhook")
+# async def verify(request: Request):
+#     print("Webhook :::::: verify::::: GET /webhook called")
+#     sys.stdout.flush()
+#     params = dict(request.query_params)
 
-    if params.get("hub.verify_token") == expected_token:
-        return PlainTextResponse(params.get("hub.challenge", "0"))
+#     expected_token = "babai"
+
+#     if params.get("hub.verify_token") == expected_token:
+#         return PlainTextResponse(params.get("hub.challenge", "0"))
     
-    return PlainTextResponse("Invalid token", status_code=403)
+#     return PlainTextResponse("Invalid token", status_code=403)
 
 
 # #(SQLAlchemy) Helper
