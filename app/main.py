@@ -40,7 +40,7 @@ app.add_middleware(
 
 # Routers — mount ONCE
 # If whatsapp.webhook defines router = APIRouter(prefix="/whatsapp"), DO NOT add another prefix here.
-app.include_router(whatsapp_router)          # no extra prefix
+#app.include_router(whatsapp_router)          # no extra prefix
 app.include_router(apis)                     # assumes it has its own paths/prefixes
 app.include_router(items.router)
 
