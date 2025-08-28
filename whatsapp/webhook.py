@@ -160,6 +160,7 @@ async def run_agent_by_name(agent_name: str, state: dict) -> dict:
 @router.get("/webhook")
 async def verify(request: Request):
     q = request.query_params
+    VERIFY_TOKEN = "babai"
     if q.get("hub.mode") == "subscribe" and q.get("hub.verify_token") == VERIFY_TOKEN:
         return PlainTextResponse(q.get("hub.challenge", "0"))
     return PlainTextResponse("Invalid token", status_code=403)  
