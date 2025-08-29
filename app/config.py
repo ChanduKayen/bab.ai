@@ -13,7 +13,7 @@ from urllib.parse import quote_plus
 
 class Settings(BaseSettings):
     # ---- Pydantic v2 settings ----
-    model_config = SettingsConfigDict(
+    model_config = SettingsConfigDict( 
         env_file=".env",
         env_file_encoding="utf-8",
         case_sensitive=True,
