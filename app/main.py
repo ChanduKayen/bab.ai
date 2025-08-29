@@ -7,17 +7,27 @@ from sqlalchemy import text
 from app.config import Settings
 from app.db import get_engine, get_sessionmaker, Base
 import database.models  # registers models on Base
+import os
 
 settings = Settings()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    engine = get_engine()           # create/validate engine here
-    get_sessionmaker()              # construct sessionmaker
-    # DB ping
-    async with engine.connect() as conn:
-        await conn.execute(text("select 1"))
-    # (Dev only) create tables. Remove in prod/migrations-only environments.
+    engine = get_engine()
+    try:
+        async with engine.connect() as conn:
+            await conn.exec_driver_sql("SET statement_timeout = 5000")  # 5s
+            await conn.exec_driver_sql("select 1")
+    except Exception:
+        import logging
+        logging.getLogger("uvicorn.error").exception(
+            "DB startup ping failed (url_scheme=%s, DB_SSLMODE=%s, rootcert_set=%s)",
+            str(engine.url).split("://",1)[0],
+            os.getenv("DB_SSLMODE", "verify-ca"),
+            bool(os.getenv("DB_SSLROOTCERT") or os.getenv("DB_CA_PEM")),
+        )
+        raise  # re-raise so App Runner logs the root error
+    # dev-only: create tables
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
     yield

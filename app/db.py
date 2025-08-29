@@ -34,7 +34,7 @@ def _ssl_args_for_postgres() -> dict:
         ctx.load_verify_locations(cafile=ca_path)
     else:
         ctx.load_verify_locations(cafile=certifi.where())
-
+ 
     if mode == "verify-full":
         ctx.check_hostname = True
         ctx.verify_mode = ssl.CERT_REQUIRED
@@ -54,9 +54,13 @@ def get_engine() -> AsyncEngine:
     url = get_db_url(Settings())
     # ...
     kwargs = {}
-    #if url.startswith("postgresql+asyncpg://"):
-       # kwargs.update(pool_size=10, max_overflow=20)
-        # kwargs["connect_args"] = _ssl_args_for_postgres()
+    if url.startswith("postgresql+asyncpg://"):
+        # fail faster if network is wrong
+        connect_args = _ssl_args_for_postgres()
+        timeout = float(os.getenv("DB_CONNECT_TIMEOUT", "10"))
+        connect_args.setdefault("timeout", timeout)
+        kwargs.update(pool_size=10, max_overflow=20, connect_args=connect_args)
+
     return create_async_engine(url, echo=True, **kwargs)
 
 def get_sessionmaker() -> async_sessionmaker:
