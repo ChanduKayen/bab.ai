@@ -17,7 +17,10 @@
 import os, json, re, logging, asyncio
 from typing import Dict, Tuple, Any, Optional
 from dotenv import load_dotenv 
-from database._init_ import AsyncSessionLocal
+#from database._init_ import AsyncSessionLocal
+from app.db import get_sessionmaker
+AsyncSessionLocal = get_sessionmaker()
+
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import SystemMessage, HumanMessage
 from models.chatstate import AgentState
@@ -297,7 +300,7 @@ async def classify_and_respond(state: AgentState, config: dict) -> AgentState:
         log.error("random_router: Convo Router delegation failed: %s", e)
         router_help_text, router_help_buttons = None, None
 
-    # --- 3) LLM concierge fallback classification ---
+    # --- 3) LLM concierge fallback classification --- 
     prompt = ROUTER_PROMPT + f"\nUSER_MESSAGE: {last_msg}"
     try:
         llm_resp = await llm.ainvoke([SystemMessage(content=prompt)])

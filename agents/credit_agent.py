@@ -5,7 +5,9 @@ from typing import Optional, List, Dict, Any
 from dotenv import load_dotenv
 
 from whatsapp.builder_out import whatsapp_output
-from database._init_ import AsyncSessionLocal
+#from database._init_ import AsyncSessionLocal
+from app.db import get_sessionmaker
+AsyncSessionLocal = get_sessionmaker()
 from langchain_core.messages import SystemMessage, HumanMessage
 
 # OPTIONAL: if you’ll use LLM anywhere (not strictly required for credit flow)

@@ -14,7 +14,6 @@ import requests
 # Load environment variables
 load_dotenv()
 APP_SECRET = os.getenv("APP_SECRET", None)
-VERIFY_TOKEN = os.getenv("VERIFY_TOKEN", "babai")  # Set your verify token here or via environment variable
 #import redis
 import asyncio  
 import random
@@ -25,7 +24,10 @@ from agents.procurement_agent import collect_procurement_details_interactively
 from agents import credit_agent
 from whatsapp.builder_out import whatsapp_output
 from users.user_onboarding_manager import user_status
-from database._init_ import AsyncSessionLocal
+#from database._init_ import AsyncSessionLocal
+from app.db import get_sessionmaker
+AsyncSessionLocal = get_sessionmaker()
+
 from database.uoc_crud import DatabaseCRUD
 from managers.uoc_manager import UOCManager
 from managers.project_intel import TaskHandler
@@ -37,7 +39,7 @@ from fastapi import BackgroundTasks
 from fastapi.responses import Response
 import json
 from hashlib import sha256
-from app.db import get_session
+from app.db import get_db
 from database.whatsapp_crud import first_time_event
 
 #This has to be updated accroding to he phone number you are using for the whatsapp business account.
@@ -156,7 +158,7 @@ async def run_agent_by_name(agent_name: str, state: dict) -> dict:
     else:
         raise ValueError(f"Unknown agent name: {agent_name}")
      
-
+@router.get("/webhook/")
 @router.get("/webhook")
 async def verify(request: Request):
     q = request.query_params
@@ -212,7 +214,7 @@ async def handle_whatsapp_event(data: dict):
             logger.info("No messages found in the entry.")
             return {"status": "ignored", "reason": "No messages found"}
         msg = entry["messages"][0]
-
+        
         
         print("Webhook :::::: whatsapp_webhook::::: Received message:", msg)
         sender_id = msg["from"]
@@ -225,12 +227,13 @@ async def handle_whatsapp_event(data: dict):
             if isinstance(profile, dict):
                 user_name = profile.get("name")
         print("Webhook :::::: whatsapp_webhook::::: usrname:", user_name)
-      
+        
         state = get_state(sender_id)  # Retrieve the state from Redis
         #state["user_full_name"] = user_name  
-        user = user_status(sender_id, user_name)
+        #user = user_status(sender_id, user_name) # Dummied
+        user = {"user_full_name": user_name, "user_stage": "new"}
         user_stage = user["user_stage"]
-
+        
         if state is None:
             state = {
                 "sender_id": sender_id,
@@ -250,11 +253,11 @@ async def handle_whatsapp_event(data: dict):
             text = msg["text"]["body"]
             state["messages"].append({"role": "user", "content": text})
             state["msg_type"] = "text"
-
+        
         elif msg_type == "image":
             media_id = msg["image"]["id"]
             caption = msg["image"].get("caption", "")
-
+        
             image_path = download_whatsapp_image(media_id)
             print("Webhook :::::: whatsapp_webhook::::: Image downloaded, path:", image_path)
             state["messages"].append({
@@ -266,7 +269,7 @@ async def handle_whatsapp_event(data: dict):
             state["caption"] = caption
             state["msg_type"] = "image"
             state["media_url"] = image_path
-
+        
             print("Webhook :::::: whatsapp_webhook::::: Image downloaded and saved at:", image_path)
         elif msg_type == "interactive":
             interactive_type = msg["interactive"]["type"]
@@ -657,7 +660,7 @@ async def handle_whatsapp_event(data: dict):
 @router.post("/webhook")
 async def whatsapp_webhook(
     request: Request,
-    session: AsyncSession = Depends(get_session),
+    session: AsyncSession = Depends(get_db),
 ):
     print("Webhook :::::: whatsapp_webhook::::: ####Webhook Called####")
 

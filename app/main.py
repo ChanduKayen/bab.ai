@@ -1,71 +1,63 @@
 # app/main.py
 from contextlib import asynccontextmanager
-
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import text
 
 from app.config import Settings
-from app.db import engine, Base              # single source of engine/Base
-import database.models                      # <-- registers models on Base
-
-from whatsapp.webhook import router as whatsapp_router
-from whatsapp.apis import router as apis
-from app.routers import items
-from app.logging_config import logger
+from app.db import get_engine, get_sessionmaker, Base
+import database.models  # registers models on Base
 
 settings = Settings()
-logger.info("main.py loaded")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    engine = get_engine()           # create/validate engine here
+    get_sessionmaker()              # construct sessionmaker
     # DB ping
     async with engine.connect() as conn:
         await conn.execute(text("select 1"))
-    # create any missing tables
+    # (Dev only) create tables. Remove in prod/migrations-only environments.
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
     yield
 
 app = FastAPI(title=settings.APP_NAME, lifespan=lifespan)
-app.include_router(whatsapp_router, prefix="/whatsapp")
+
+# Routers — import AFTER app exists (still fine), but ensure those modules
+# don't create engines/sessions at import time.
+from whatsapp.webhook import router as whatsapp_router
+from whatsapp.apis import router as apis
+from app.routers import items
+from app.logging_config import logger
+
 # CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],   # tighten later
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# Routers — mount ONCE
-# If whatsapp.webhook defines router = APIRouter(prefix="/whatsapp"), DO NOT add another prefix here.
-#app.include_router(whatsapp_router)          # no extra prefix
-app.include_router(apis)                     # assumes it has its own paths/prefixes
+# Mount routers (avoid duplicate prefixes)
+app.include_router(whatsapp_router, prefix="/whatsapp")
+app.include_router(apis)
 app.include_router(items.router)
 
-# Utility routes
 @app.get("/")
 def read_root():
     return {"status": "backend is live"}
 
 @app.get("/routes")
 def show_routes():
-    return [r.path for r in app.routes]
+    out = []
+    for r in app.routes:
+        path = getattr(r, "path", None)
+        methods = sorted(getattr(r, "methods", []) or [])
+        out.append({"path": path, "methods": methods})
+    return out
 
 @app.get("/health")
 def health():
     return {"ok": True, "stage": settings.STAGE}
-
-for route in app.routes:
-    print(" Registered route:", route.path)
-    logger.info(f" Registered route: {route.path}")
-# Optional: log routes at startup
-@app.on_event("startup")
-async def _log_routes():
-    for r in app.routes:
-        try:
-            logger.info(f"Registered route: {r.path}")
-            print(" Registered route:", r.path)
-        except Exception:
-            pass

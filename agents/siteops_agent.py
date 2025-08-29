@@ -13,7 +13,10 @@ from models.chatstate import AgentState
 from managers.uoc_manager import UOCManager
 from whatsapp.builder_out import whatsapp_output
 from database.uoc_crud import DatabaseCRUD
-from database._init_ import AsyncSessionLocal
+#from database._init_ import AsyncSessionLocal
+from app.db import get_sessionmaker
+AsyncSessionLocal = get_sessionmaker()
+
 from database.procurement_crud import ProcurementCRUD
   # <-- Add this import, adjust path as needed
 load_dotenv()

@@ -6,7 +6,10 @@ from dotenv import load_dotenv
 from database.uoc_crud import DatabaseCRUD
 from database.procurement_crud import ProcurementCRUD
 from database.credit_crud import CreditCRUD 
-from database._init_ import AsyncSessionLocal 
+#from database._init_ import AsyncSessionLocal 
+from app.db import get_sessionmaker
+AsyncSessionLocal = get_sessionmaker()
+
 load_dotenv()
 _llm = ChatOpenAI(model="gpt-4o-mini", temperature=0, openai_api_key=os.getenv("OPENAI_API_KEY"))
 
