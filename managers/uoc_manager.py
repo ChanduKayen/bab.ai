@@ -9,7 +9,6 @@ from rapidfuzz import fuzz
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import SystemMessage, HumanMessage
 from whatsapp.builder_out import whatsapp_output
-from database._init_ import AsyncSessionLocal
 from database.models import Project, Flat, Region
 from sqlalchemy import select
 from sqlalchemy.orm import joinedload

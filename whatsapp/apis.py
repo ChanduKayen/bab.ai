@@ -7,7 +7,10 @@ from pydantic import BaseModel, Field
 from uuid import UUID
 from datetime import datetime
 from typing import Optional, List
-from database._init_ import AsyncSessionLocal
+#from database._init_ import AsyncSessionLocal
+from app.db import get_sessionmaker
+AsyncSessionLocal = get_sessionmaker()
+
 from database.procurement_crud import ProcurementCRUD
 
 class MaterialItem(BaseModel):
