@@ -2,7 +2,7 @@
 fastapi>=0.111,<1.0
 uvicorn[standard]>=0.30,<1.0
 gunicorn>=21.2,<22
-
+ 
 # ── DB & migrations (SQLAlchemy 2.x async with Postgres) ─────────────────────
 sqlalchemy>=2.0,<3
 asyncpg>=0.29,<1
