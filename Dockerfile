@@ -7,7 +7,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 # Install system deps (build tools only for wheels), curl for CA download
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential curl ca-certificates && \
-    rm -rf /var/lib/apt/lists/*
+    rm -rf /var/lib/apt/lists/* 
 
 WORKDIR /app
 

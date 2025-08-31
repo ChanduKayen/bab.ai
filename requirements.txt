@@ -20,10 +20,10 @@ httpx>=0.27,<1                 # used in services / future async calls
 python-multipart>=0.0.9,<1     # FastAPI form/file parsing
 
 # ── OpenAI / LangChain / LangGraph (agents & orchestration) ──────────────────
-openai>=1.40,<2
-langchain-core>=0.2.41,<1
-langchain-openai>=0.1.22,<1
-langgraph>=0.2.14,<1           # imported in orchastrator.core
+langgraph==0.3.33
+langchain-core==0.3.66
+langchain-openai==0.3.25
+openai==1.92.0          # imported in orchastrator.core
 
 # ── AWS SDK (S3, etc.) ───────────────────────────────────────────────────────
 boto3>=1.34,<2
