@@ -7,7 +7,7 @@ gunicorn>=21.2,<22
 sqlalchemy>=2.0,<3
 asyncpg>=0.29,<1
 greenlet>=3.0,<4              # required by some SQLAlchemy async contexts
-alembic>=1.13,<2              # your models/migrations toolchain
+alembic>=1.13,<2              # your models/migrations toolchain 
 
 # ── Pydantic v2 & settings/env ───────────────────────────────────────────────
 pydantic>=2.7,<3
