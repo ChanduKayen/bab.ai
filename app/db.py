@@ -24,20 +24,20 @@ def _ssl_args_for_postgres() -> dict:
         return {}
 
     ctx = ssl.create_default_context()
-
+ 
     # Priority: explicit PEM path → PEM string → certifi bundle
-    ca_path = os.getenv("DB_SSLROOTCERT")
+    ca_path = os.getenv("DB_SSLROOTCERT") 
     ca_pem  = os.getenv("DB_CA_PEM")
     if ca_pem:
         ctx.load_verify_locations(cadata=ca_pem)
-    elif ca_path:
+    elif ca_path: 
         ctx.load_verify_locations(cafile=ca_path)
     else:
         ctx.load_verify_locations(cafile=certifi.where())
  
     if mode == "verify-full":
         ctx.check_hostname = True
-        ctx.verify_mode = ssl.CERT_REQUIRED
+        ctx.verify_mode = ssl.CERT_REQUIRED 
     elif mode == "verify-ca":
         ctx.check_hostname = False
         ctx.verify_mode = ssl.CERT_REQUIRED

@@ -254,7 +254,8 @@ def _last_user_text(state: AgentState) -> str:
 # ------------------------------------------------------------------
 # Main entry
 # ------------------------------------------------------------------ 
-async def classify_and_respond(state: AgentState, config: dict) -> AgentState:
+async def classify_and_respond(state: AgentState, config: Optional[Dict[str, Any]] = None, **kwargs) -> AgentState:
+    config = config or {}
     last_msg = _last_user_text(state)
     last_lower = last_msg.lower()
     log.debug("random_router:last_message: %s", last_lower)
