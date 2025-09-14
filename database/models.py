@@ -363,7 +363,7 @@ class VendorQuoteItem(Base):
     delivery_days = Column(Integer, nullable=True)    # e.g., 7 days
     delivery_date = Column(Date, nullable=True)      # alternative exact date
     comments      = Column(Text, nullable=True)       # vendor's comments or notes
-    status        = Column(Enum(QuoteStatus), default=RequestStatus.QUOTED, nullable=False)  # quoted / approved
+    status        = Column(Enum(QuoteStatus), default=QuoteStatus.QUOTED, nullable=False)  # quoted / approved
 
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
@@ -405,6 +405,9 @@ class SkuMaster(Base):
     # Identity string generated in app layer (e.g., lower(brand)|grade|size…)
     canonical_key = Column(String, nullable=True)
 
+    # Marks placeholder/low-confidence SKUs created from uncertain matches
+    ambiguous    = Column(Boolean, nullable=False, default=False)
+
     # active | retired
     status       = Column(String, nullable=False, default="active")
     created_at   = Column(DateTime, default=datetime.utcnow, nullable=False)
@@ -413,6 +416,7 @@ class SkuMaster(Base):
     __table_args__ = (
         Index("idx_sku_cankey", "canonical_key"),
         Index("idx_sku_attrs", "attributes", postgresql_using="gin"),
+        Index("idx_sku_ambiguous", "ambiguous"),
         CheckConstraint("status IN ('active','retired')", name="ck_sku_status"),
     )
 
@@ -513,3 +517,27 @@ class PartnerStatusHistory(Base):
     "MaterialRequestItem",
     "VendorQuoteItem",
 ]
+
+
+# -------------------------------------------------------------------------
+# sku_alias  (alias terms mapped to canonical/master SKU)
+# -------------------------------------------------------------------------
+
+
+class SkuAlias(Base):
+    __tablename__ = "sku_alias"
+
+    id            = Column(BigInteger, primary_key=True, autoincrement=True)
+    master_sku_id = Column(String, ForeignKey("sku_master.sku_id", ondelete="CASCADE"), nullable=False)
+    alias_text    = Column(String, nullable=False)
+    region        = Column(String, nullable=True)   # optional locality tag (e.g., city/state)
+    vendor_id     = Column(UUID(as_uuid=True), ForeignKey("vendors.vendor_id", ondelete="SET NULL"), nullable=True)
+    confidence    = Column(Numeric, nullable=True)  # optional 0..1
+
+    created_at    = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at    = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+    __table_args__ = (
+        Index("idx_sku_alias_master", "master_sku_id"),
+        Index("idx_sku_alias_text", "alias_text"),
+    )

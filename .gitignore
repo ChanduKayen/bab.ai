@@ -20,6 +20,7 @@ venv/
 env/
 .venv/
 newenv/
+zipper/
 
 # FastAPI static/temp data
 static/

@@ -43,7 +43,7 @@ from app.db import get_db
 from database.whatsapp_crud import first_time_event
 
 #This has to be updated accroding to he phone number you are using for the whatsapp business account.
-WHATSAPP_API_URL = "https://graph.facebook.com/v19.0/712076848650669/messages"
+WHATSAPP_API_URL = "https://graph.facebook.com/v19.0/768446403009450/messages"
 #ACCESS_TOKEN = "EAAIMZBw8BqsgBO4ZAdqhSNYjSuupWb2dw5btXJ6zyLUGwOUE5s5okrJnL4o4m89b14KQyZCjZBZAN3yZBCRanqLC82m59bGe4Rd2BPfRe3A3pvGFZCTf2xB7a6insIzesPDVMLIw4gwlMkkz7NGl3ZBLvP5MU8i3mZBMmUBShGeQkSlAyRhsXJtlsg8uGaAfYwTid8PZAGBKnbOR3LFpCgBD8ZCIMJh9xI0sHWy"  
 
 ACCESS_TOKEN = os.getenv("WHATSAPP_ACCESS_TOKEN")
@@ -51,7 +51,6 @@ ACCESS_TOKEN = os.getenv("WHATSAPP_ACCESS_TOKEN")
 # implementing a presistnace layer to preseve the chat history tha saves the state of messages for followup questions required by UOC manager 
 #r = redis.Redis(host='localhost', port=6379, decode_responses=True)
 memory_store = {}
- 
 
 def get_state(sender_id: str): 
     print("Webhook :::::: get_state::::: Getting state for sender_id:", sender_id)
@@ -131,7 +130,7 @@ def download_whatsapp_image(media_id: str) -> str:
     
     #Downloading media content
     image_data = requests.get(media_url, headers=headers).content
-    filename = f"C:/Users/koppi/OneDrive/Desktop/Bab.ai/{media_id}.jpg"
+    filename = f"C:/Users/vlaks/OneDrive/Desktop/Bab.ai/{media_id}.jpg"
     
     with open(filename, "wb") as f:
         f.write(image_data)
@@ -221,7 +220,7 @@ async def handle_whatsapp_event(data: dict):
         msg_type = msg["type"]
         contacts = entry.get("contacts", [])
         user_name = None
-        
+
         if contacts and isinstance(contacts[0], dict):
             profile = contacts[0].get("profile", {})
             if isinstance(profile, dict):
@@ -308,7 +307,7 @@ async def handle_whatsapp_event(data: dict):
 
             # Download the file
             ext = ".pdf" if file_type == "pdf" else ".bin"
-            local_path = f"C:/Users/koppi/OneDrive/Desktop/Bab.ai/{media_id}{ext}"
+            local_path = f"C:/Users/vlaks/OneDrive/Desktop/Bab.ai/{media_id}{ext}"
             try:
                 file_data = requests.get(media_url, timeout=10).content
                 with open(local_path, "wb") as fp:
@@ -526,16 +525,14 @@ async def handle_whatsapp_event(data: dict):
             elif q_type == "procurement":
                 print("Webhook :::::: whatsapp_webhook::::: q_type = procurement :::: The set question type is procurement, so calling ??collect_procurement_details_interactively?? --", state["uoc_question_type"])
                 followups_state = await collect_procurement_details_interactively(state)
-                save_state(sender_id, followups_state)
-                response_msg = followups_state.get("latest_respons", "No response available.")
-                message_type = followups_state.get("uoc_next_message_type", "plain")
-                extra_data = followups_state.get("uoc_next_message_extra_data", None)
-                #whatsapp_output(sender_id, response_msg, message_type=message_type, extra_data=extra_data)
                 return {"status": "done", "reply": response_msg}
                
             elif q_type== "procurement_new_user_flow":
                 print("Webhook :::::: whatsapp_webhook::::: q_type = procurement_new_user_flow :::: The set question type is procurement_new_user_flow, so calling ??procurement_agent.run_procurement_agent?? --", state["uoc_question_type"])
-                followups_state = await procurement_agent.run_procurement_agent(state, config={"configurable": {"crud": crud}})
+                try:
+                    followups_state = await procurement_agent.run_procurement_agent(state, config={"configurable": {"crud": crud}})
+                except Exception as e:
+                    print("Webhook ::::: whatsapp_webhook ::::: q_type = procurement_new_user_flow ::::: Exception rasied : ", e)
 
             elif q_type == "credit_start": 
                 print("Webhook :::::: whatsapp_webhook::::: <needs_clarification True>::::: <uoc_question_type>::::: -- The set question type is credit_onboard_start, so calling ??credit_agent.run_credit_agent?? --", state["uoc_question_type"])

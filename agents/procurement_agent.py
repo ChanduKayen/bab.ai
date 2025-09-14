@@ -542,6 +542,48 @@ async def new_user_flow(state: AgentState, crud: ProcurementCRUD  ) -> AgentStat
     sender_id = state["sender_id"]
     uoc_next_message_extra_data = state.get("uoc_next_message_extra_data", [])
     latest_response = state.get("latest_respons", None)
+    # Handle vendor acknowledgement buttons without changing webhook
+    if last_msg in ("vendor_confirm", "vendor_cannot_fulfill"):
+        ctx = state.get("vendor_ack_context", {}) or {}
+        req_id = ctx.get("request_id")
+        ven_id = ctx.get("vendor_id")
+        if not req_id or not ven_id:
+            state.update({
+                "latest_respons": "Context missing for this action. Please try again later.",
+                "uoc_next_message_type": "plain",
+                "needs_clarification": False,
+            })
+            return state
+        try:
+            async with AsyncSessionLocal() as session:
+                pcrud = ProcurementCRUD(session)
+                if last_msg == "vendor_confirm":
+                    user_id = await pcrud.get_sender_id_from_request(str(req_id))
+                    if user_id:
+                        await notify_user_vendor_confirmed(user_id=user_id, request_id=str(req_id))
+                    state.update({
+                        "latest_respons": "Thanks! Order confirmed. We will coordinate delivery.",
+                        "uoc_next_message_type": "plain",
+                        "needs_clarification": False,
+                    })
+                else:  # vendor_cannot_fulfill
+                    await pcrud.vendor_decline_and_reopen(request_id=str(req_id), vendor_id=str(ven_id))
+                    user_id = await pcrud.get_sender_id_from_request(str(req_id))
+                    if user_id:
+                        await notify_user_vendor_declined(user_id=user_id, request_id=str(req_id))
+                    state.update({
+                        "latest_respons": "Acknowledged. We’ve informed the buyer you can’t fulfill.",
+                        "uoc_next_message_type": "plain",
+                        "needs_clarification": False,
+                    })
+        except Exception as e:
+            print("procurement_agent ::::: vendor ack flow exception:", e)
+            state.update({
+                "latest_respons": "Sorry, something went wrong processing your response.",
+                "uoc_next_message_type": "plain",
+                "needs_clarification": False,
+            })
+        return state
     print("Procurement Agent:::: new_user_flow : last_msg is: -", last_msg)
     # print("Procurement Agent:::: new_user_flow : procurment conversation log  is: -", state.get("siteops_conversation_log", []))
     print("Procurement Agent:::: new_user_flow : the state received here is : -", state)
@@ -625,7 +667,7 @@ _Next, choose an action:_
             """
            
             path = generate_review_order_card(
-    out_dir="C:/Users/koppi/OneDrive/Desktop/Bab.ai/upload_images",
+    out_dir="C:/Users/vlaks/OneDrive/Desktop/Bab.ai/upload_images",
     variant="waba_header2x",  # 1600x836 (2x 800x418)
     brand_name="bab-ai.com Procurement System",
     brand_pill_text="Procurement",
