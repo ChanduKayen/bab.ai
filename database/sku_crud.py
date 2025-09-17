@@ -182,14 +182,14 @@ class SkuCRUD:
             # fallback to comments if present
             query_text = comments or ""
 
-        print(f"sku_crud ::::: process_vendor_quote_item ::::: built query text: {query_text}")
+        # print(f"sku_crud ::::: process_vendor_quote_item ::::: built query text: {query_text}")
         candidates = await self.search_skus_score(query_text, limit=5)
         top = candidates[0] if candidates else None
         score = float(top["score"]) if top else 0.0
         score_norm = min(1.0, score / 240.0)
-        print(
-            f"sku_crud ::::: process_vendor_quote_item ::::: query='{query_text}', candidates={len(candidates)}, top={(top or {}).get('sku_id') if top else None}, score={score}, score_norm={score_norm}"
-        )
+        # print(
+        #     f"sku_crud ::::: process_vendor_quote_item ::::: query='{query_text}', candidates={len(candidates)}, top={(top or {}).get('sku_id') if top else None}, score={score}, score_norm={score_norm}"
+        # )
 
         if top and score_norm >= 0.80:
             print(f"sku_crud ::::: process_vendor_quote_item ::::: high confidence match: {top['sku_id']} with score {score} (norm {score_norm})")

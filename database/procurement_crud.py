@@ -292,6 +292,50 @@ class ProcurementCRUD:
             print("procurement_crud ::::: Error in sync_material_request_items_by_ids ::::", e)
             raise
 
+
+    async def add_quote_request_vendors(self, request_id: _UUID, vendor_ids: List[_UUID]) -> None:
+        try:
+            unique_ids: Set[_UUID] = {_UUID(str(v_id)) for v_id in vendor_ids if v_id}
+            if not unique_ids:
+                print("procurement_crud ::::: add_quote_request_vendors ::::: no vendor ids provided")
+                return
+
+            req_uuid = _UUID(str(request_id))
+            print(f"procurement_crud ::::: add_quote_request_vendors ::::: unique vendor ids : {unique_ids}")
+            values = [
+                {"quote_request_id": req_uuid, "vendor_id": ven_id}
+                for ven_id in unique_ids
+            ]
+
+            stmt = pg_insert(QuoteRequestVendor).values(values)
+            stmt = stmt.on_conflict_do_nothing()
+            print(f"procurement_crud ::::: add_quote_request_vendors ::::: inserting vendors : {values}")
+            await self.session.execute(stmt)
+            await self.session.commit()
+            print(f"procurement_crud ::::: add_quote_request_vendors ::::: inserted count : {len(values)}")
+        except Exception as e:
+            await self.session.rollback()
+            print("procurement_crud ::::: add_quote_request_vendors ::::: exception :", e)
+            raise
+
+    async def get_vendor_by_id(self, vendor_id: _UUID) -> Optional[Vendor]:
+        try:
+            if not vendor_id:
+                return None
+            vid = _UUID(str(vendor_id))
+            result = await self.session.execute(
+                select(Vendor).where(Vendor.vendor_id == vid)
+            )
+            vendor = result.scalar_one_or_none()
+            if not vendor:
+                print(f"procurement_crud ::::: get_vendor_by_id ::::: vendor not found for id : {vendor_id}")
+            else:
+                print(f"procurement_crud ::::: get_vendor_by_id ::::: fetched vendor : {vendor.vendor_id}")
+            return vendor
+        except Exception as e:
+            print("procurement_crud ::::: get_vendor_by_id ::::: exception :", e)
+            raise
+
     async def get_request_item_specs(self, request_id) -> Dict[str, dict]:
         try:
             result = await self.session.execute(

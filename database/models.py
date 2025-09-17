@@ -183,7 +183,7 @@ class MaterialRequest(Base):
     __tablename__ = "material_requests"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    project_id = Column(UUID(as_uuid=True), ForeignKey("public.projects.id", ondelete="SET NULL"), nullable=True)
+    project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id", ondelete="SET NULL"), nullable=True)
     
     sender_id = Column(String, nullable=False)  # WhatsApp user ID
     status = Column(Enum(RequestStatus), default=RequestStatus.DRAFT, nullable=False)  # draft / requested / quoted / approved
@@ -227,10 +227,11 @@ class MaterialRequestItem(Base):
     
     vendor_quote_items = relationship(
         "VendorQuoteItem",
-        back_populates="material_request_item",
-        cascade="all, delete-orphan", 
+        back_populates="request_item",
+        cascade="all, delete-orphan",
         passive_deletes=True,
     )
+
     __table_args__ = (
         Index("ix_mri_request_id", "material_request_id"),
     )
@@ -374,7 +375,7 @@ class VendorQuoteItem(Base):
 
     # Relationships
     request      = relationship("MaterialRequest", back_populates="vendor_quote_items")
-    request_item = relationship("MaterialRequestItem", backref="vendor_quotes")
+    request_item = relationship("MaterialRequestItem", back_populates="vendor_quote_items")
     vendor       = relationship("Vendor", back_populates="vendor_quote_items")
 
 
@@ -469,7 +470,7 @@ class CreditProfile(Base):
     __tablename__ = "credit_profiles"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    user_id = Column(UUID(as_uuid=True), ForeignKey("public.users.id", ondelete="CASCADE"), unique=True, nullable=False)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), unique=True, nullable=False)
     aadhaar = Column(String(20), nullable=True)
     pan = Column(String(10), nullable=True)
     gst = Column(String(20), nullable=True)
@@ -541,3 +542,4 @@ class SkuAlias(Base):
         Index("idx_sku_alias_master", "master_sku_id"),
         Index("idx_sku_alias_text", "alias_text"),
     )
+

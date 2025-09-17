@@ -720,13 +720,10 @@ _Next, choose an action:_
                 return await _HANDLER_MAP[last_msg](state, crud, uoc_next_message_extra_data)
             else: 
                 print("Procurement Agent:::: new_user_flow : last_msg is not main_menu, handling it as a specific intent")
-        state["last_known_intent"] = "procurement"
-        state = await route_and_respond(state)
-
-        
- 
-
-        return state
+                state["last_known_intent"] = "procurement"
+                state = await route_and_respond(state)
+                return state
+            
         latest_msg_intent= state["intent"]
         latest_msg_context = state["intent_context"]
 

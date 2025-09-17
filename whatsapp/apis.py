@@ -46,7 +46,7 @@ class SubmitOrderRequest(BaseModel):
     notes: Optional[str] = None
     expected_delivery_date: Optional[datetime] = None
     project: Project
-    vendors: List[Vendor] = []
+    vendors: List[Vendor] = Field(default_factory=list)
     items: List[MaterialItem]
     
 class VendorQuoteItem(BaseModel):
@@ -127,8 +127,33 @@ async def submit_order(payload: SubmitOrderRequest):
                 raise HTTPException(status_code=500, detail="Failed to sync procurement items.")
             
             print("apis ::::: submit_order :::::  sync finished")
-            
-            sender_id = await crud.get_sender_id_from_request(str(payload.request_id)) if not payload.sender_id else payload.sender_id
+
+            vendor_targets: List[Dict[str, Optional[str]]] = []
+            vendor_ids = []
+            seen_vendor_ids = set()
+            for vendor in payload.vendors:
+                if not vendor.vendor_id:
+                    continue
+                vendor_ids.append(vendor.vendor_id)
+                vid_str = str(vendor.vendor_id)
+                if vid_str in seen_vendor_ids:
+                    continue
+                seen_vendor_ids.add(vid_str)
+                vendor_targets.append({
+                    "vendor_id": vid_str,
+                    "phone": vendor.phone,
+                    "name": vendor.name,
+                })
+
+            if vendor_ids:
+                await crud.add_quote_request_vendors(payload.request_id, vendor_ids)
+                print(f"apis ::::: submit_order ::::: vendor_ids persisted : {vendor_ids}")
+            else:
+                vendor_targets = []
+                print("apis ::::: submit_order ::::: no vendors provided in payload")
+
+            print(f"apis ::::: submit_order ::::: vendor targets : {vendor_targets}")
+            sender_id = payload.sender_id or await crud.get_sender_id_from_request(str(payload.request_id))
             print(f"apis ::::: submit_order :::::  sender id : {sender_id}")
             if not sender_id:
                 raise HTTPException(status_code=404, detail="Request ID not found; cannot resolve sender_id.")
@@ -145,7 +170,7 @@ async def submit_order(payload: SubmitOrderRequest):
             state={} 
             
             print(f"submit_order ::::: sender id : calling handle quote flow")
-            await handle_quote_flow(state, sender_id, [], str(payload.request_id), [item.dict() for item in payload.items])
+            await handle_quote_flow(state, sender_id, vendor_targets, str(payload.request_id), [item.dict() for item in payload.items])
             print(f"submit_order ::::: sender id : handle quote flow done")
 
         return {"success": True, "message": "Procurement request submitted and quote flow started."}
@@ -239,12 +264,16 @@ async def confirm_order(payload: ConfirmOrderRequest):
                 notes=payload.notes,
             )
 
-            # Notify vendor (hardcoded phone as per current policy)
+            # Notify vendor via WhatsApp
             try:
+                vendor_record = await crud.get_vendor_by_id(payload.vendor_id)
+                vendor_phone = getattr(vendor_record, "phone_number", None) if vendor_record else None
+                print(f"apis ::::: confirm_order ::::: resolved vendor phone : {vendor_phone}")
                 await send_vendor_order_confirmation(
                     request_id=str(payload.request_id),
                     vendor_id=str(payload.vendor_id),
                     order_summary=summary,
+                    phone=vendor_phone,
                 )
             except Exception as me:
                 # Non-fatal
