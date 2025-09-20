@@ -1,4 +1,5 @@
 
+import asyncio
 from decimal import Decimal
 from database.models import MaterialRequest, MaterialRequestItem, QuoteRequestVendor, QuoteResponse, SkuMaster, SkuVendorPrice
 from database.models import VendorQuoteItem as VendorQuoteItemDB, RequestStatus, Vendor
@@ -375,6 +376,8 @@ class ProcurementCRUD:
         print(f"procurement_crud ::::: insert_vendor_quotes ::::: started for request_id : {request_id}, vendor_id : {vendor_id}")
 
         now = datetime.utcnow()
+        skuCRUD = SkuCRUD(self.session)
+        sku_tasks: List[asyncio.Task] = []
 
         for item in items:
             try:
@@ -409,18 +412,18 @@ class ProcurementCRUD:
                 await self.session.execute(stmt)
                 print(f"procurement_crud ::::: insert_vendor_quotes ::::: upsert OK for item_name={item.requested_item_id}")
 
-                # Match SKU and write into sku_vendor_price according to thresholds
-                try:
-                    skuCRUD = SkuCRUD(self.session)
-                    await skuCRUD.process_vendor_quote_item(request_id, vendor_id, item)
-                except Exception as me:
-                    # Non-fatal: keep VendorQuoteItem upsert even if matching fails
-                    print(f"procurement_crud ::::: insert_vendor_quotes ::::: matching error for item_id={item.requested_item_id} : {me}")
+                sku_tasks.append(asyncio.create_task(skuCRUD.process_vendor_quote_item(request_id, vendor_id, item)))
 
             except Exception as e:
                 await self.session.rollback()
                 print(f"procurement_crud ::::: insert_vendor_quotes ::::: exception for item_id={item.requested_item_id} : {e}")
                 raise
+
+        if sku_tasks:
+            results = await asyncio.gather(*sku_tasks, return_exceptions=True)
+            for result in results:
+                if isinstance(result, Exception):
+                    print(f"procurement_crud ::::: insert_vendor_quotes ::::: matching task raised exception : {result}")
 
         await self.session.commit()
     
