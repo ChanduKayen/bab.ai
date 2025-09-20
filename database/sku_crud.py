@@ -320,7 +320,7 @@ class SkuCRUD:
 
         return items
 
-    async def search_skus_score(self, keyword: str, limit: int = 25) -> List[Dict[str, Any]]:
+    async def search_skus_score(self, keyword: str, limit: int = 5) -> List[Dict[str, Any]]:
         """
         Fuzzy search that ENFORCES type & dimension match (with tolerance) and ranks primarily by them.
         No reliance on brand/category/description/canonical_key scoring.
