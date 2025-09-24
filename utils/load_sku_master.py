@@ -18,7 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
 # ──────────────────────────────────────────────────────────────────────────────
 # HARD-CODED EXCEL FILE PATH (set this to your local file)
-EXCEL_PATH = r"C:\Users\vlaks\Downloads\sku_master_data_with_additions.xlsx"  # <-- EDIT ME
+EXCEL_PATH = r"D:\\babai\\bab.ai\\outputs\\cleaned_sku_master_sorted.xlsx"
 EXCEL_SHEET = "Sheet1"  # None = first sheet
 SCHEMA = "public"
 TABLE_NAME = "sku_master"
@@ -118,6 +118,17 @@ def _build_record(row: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     if status not in ("active", "retired"):
         status = "active"
 
+    ambiguous_raw = row.get("ambiguous")
+    ambiguous_val = None
+    if isinstance(ambiguous_raw, str):
+        cleaned = ambiguous_raw.strip().lower()
+        if cleaned in ("true", "1", "yes"):
+            ambiguous_val = True
+        elif cleaned in ("false", "0", "no"):
+            ambiguous_val = False
+    elif isinstance(ambiguous_raw, (bool, int)):
+        ambiguous_val = bool(ambiguous_raw)
+
     now = datetime.utcnow()
     return {
         "sku_id": sku_id,
@@ -127,9 +138,10 @@ def _build_record(row: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         "pack_qty": pack_qty,
         "pack_uom": pack_uom,
         "description": description,
-        "attributes": attrs,           # dict → JSONB
+        "attributes": attrs,           # dict ? JSONB
         "canonical_key": canonical_key,
         "status": status,
+        "ambiguous": ambiguous_val,
         "created_at": now,
         "updated_at": now,
     }
@@ -189,3 +201,4 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
