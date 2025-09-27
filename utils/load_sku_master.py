@@ -94,6 +94,14 @@ def _clean_text(value: Optional[str]) -> Optional[str]:
     return s
 
 
+def _format_mm_text(value: Optional[float]) -> Optional[str]:
+    if value is None:
+        return None
+    if abs(value - round(value)) < 1e-6:
+        return f"{int(round(value))} mm"
+    return f"{value:g} mm"
+
+
 def _build_record(row: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     for key in REQUIRED_COLS:
         if key not in row:
@@ -139,16 +147,16 @@ def _build_record(row: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     size_mm_primary = _safe_number(row.get("size_mm_primary"))
     size_mm_secondary = _safe_number(row.get("size_mm_secondary"))
 
-    primary_size_native = _safe_number(row.get("primary_size_native"))
+    primary_size_native = _clean_text(row.get("primary_size_native"))
     primary_size_unit = _clean_text(row.get("primary_size_unit"))
     if primary_size_native is None and size_mm_primary is not None:
-        primary_size_native = size_mm_primary
+        primary_size_native = _format_mm_text(size_mm_primary)
         primary_size_unit = primary_size_unit or "mm"
 
-    secondary_size_native = _safe_number(row.get("secondary_size_native"))
+    secondary_size_native = _clean_text(row.get("secondary_size_native"))
     secondary_size_unit = _clean_text(row.get("secondary_size_unit"))
     if secondary_size_native is None and size_mm_secondary is not None:
-        secondary_size_native = size_mm_secondary
+        secondary_size_native = _format_mm_text(size_mm_secondary)
         secondary_size_unit = secondary_size_unit or "mm"
 
     fragments = [brand, category, type_norm or "", (attrs.get("type") if attrs else ""), (attrs.get("variant") if attrs else ""), (attrs.get("raw_dimension") if attrs else ""), description or ""]

@@ -16,7 +16,7 @@ async def send_quote_request_to_vendor(vendor_id: str, request_id: str, contact_
         print(f"quotation_handler ::::: send_quote_request_to_vendor ::::: missing contact for vendor {vendor_id}")
         return
 
-    quote_page_url = f"{VENDOR_QUOTE_URL_BASE}?uuid={request_id}&vendor_id={vendor_id}"
+    quote_page_url = f"{VENDOR_QUOTE_URL_BASE}?uuid={request_id}&vendorId={vendor_id}"
     message = "You have a new material quote request. Please review and respond:"
     cta_button = {
         "display_text": "Review & Respond",

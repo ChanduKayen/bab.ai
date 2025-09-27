@@ -472,8 +472,9 @@ async def handle_rfq(state: AgentState, crud: ProcurementCRUD, latest_response: 
     """
     Handle the RFQ intent by updating the state and returning it.
     """
+    print("Procurement Agent::::: handle_rfq:::::  state recieved --", state)
     material_request_id = state["active_material_request_id"] if "active_material_request_id" in state else None
-    review_order_url = apis.get_review_order_url("https://www.bab-ai.com/orders/review-order", {}, {"uuid": state["active_material_request_id"]})
+    review_order_url = apis.get_review_order_url(os.getenv("REVIEW_ORDER_URL_BASE"), {}, {"senderId" : state.get("sender_id", ""), "uuid": state["active_material_request_id"]})
     review_order_url_response = """*Choose Vendors and proceed to palce order*"""
 
     state.update(
@@ -508,7 +509,7 @@ async def handle_order_edit(state: AgentState, crud: ProcurementCRUD, latest_res
     """
      material_request_id = state["active_material_request_id"] if "active_material_request_id" in state else None
      print("Procurement Agent::::: handle_rfq:::::  edit order active_materail_request_id : ", material_request_id)
-     review_order_url = apis.get_review_order_url("https://www.bab-ai.com/orders/review-order", {}, {"uuid": state["active_material_request_id"]})
+     review_order_url = apis.get_review_order_url(os.getenv("REVIEW_ORDER_URL_BASE"), {}, {"senderId" : state.get("sender_id", ""), "uuid": state["active_material_request_id"]})
      review_order_url_response = """🔎 *Edit your Order Here*"""
 
      state.update(

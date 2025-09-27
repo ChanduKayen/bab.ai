@@ -1,8 +1,85 @@
 # utils/sku_normalizer.py
 import re
+from fractions import Fraction
 from math import isnan
+from typing import Optional
 
 INCH_TO_MM = 25.4
+
+INCH_NOMINAL_MM = {
+    "1/4": 8,
+    "3/8": 10,
+    "1/2": 15,
+    "5/8": 16,
+    "3/4": 20,
+    "1": 25,
+    "1 1/4": 32,
+    "1-1/4": 32,
+    "1 1/2": 40,
+    "1-1/2": 40,
+    "2": 50,
+    "2 1/2": 65,
+    "2-1/2": 65,
+    "3": 80,
+    "4": 100,
+    "5": 125,
+    "6": 150,
+    "8": 200,
+    "10": 250,
+    "12": 300,
+    "6/3": 50,
+}
+
+def _parse_fraction_token(token: str) -> Fraction:
+    token = token.strip()
+    if not token:
+        raise ValueError("empty fraction token")
+    cleaned = token.replace("-", " ")
+    cleaned = re.sub(r"\s+", " ", cleaned)
+    total = Fraction(0, 1)
+    for part in cleaned.split(" "):
+        if not part:
+            continue
+        if "/" in part:
+            total += Fraction(part)
+        else:
+            total += Fraction(part)
+    return total
+
+INCH_FRACTION_TO_MM = {
+    _parse_fraction_token(key): mm for key, mm in INCH_NOMINAL_MM.items()
+}
+
+
+def _fraction_to_mixed_string(frac: Fraction) -> str:
+    sign = "-" if frac < 0 else ""
+    frac = abs(frac)
+    whole = frac.numerator // frac.denominator
+    remainder = Fraction(frac.numerator % frac.denominator, frac.denominator)
+    if remainder == 0:
+        return f"{sign}{whole}"
+    if whole:
+        return f"{sign}{whole}-{remainder.numerator}/{remainder.denominator}"
+    return f"{sign}{remainder.numerator}/{remainder.denominator}"
+
+
+def _format_mm(value: float) -> str:
+    if value is None:
+        return ""
+    if abs(value - round(value)) < 1e-6:
+        return str(int(round(value)))
+    formatted = f"{value:.2f}".rstrip("0").rstrip(".")
+    return formatted
+
+
+def _snap_mm(value: Optional[float]) -> Optional[float]:
+    if value is None:
+        return None
+    for fraction, nominal_mm in INCH_FRACTION_TO_MM.items():
+        actual_mm = float(fraction * INCH_TO_MM)
+        if abs(value - actual_mm) <= 0.6:
+            return float(nominal_mm)
+    return float(round(value)) if abs(value - round(value)) <= 0.1 else value
 
 TYPE_ALIASES = {
     "pipe": "pipe", "pipes": "pipe",
@@ -67,45 +144,99 @@ def _parse_mixed_inches(text: str) -> float:
         return float(m2.group(0))
     return float("nan")
 
-def _parse_one_size(token: str):
-    s = normalize_text(token).replace("inches", "inch")
+def _inch_to_mm(token: str):
+    try:
+        fraction = _parse_fraction_token(token)
+    except (ValueError, ZeroDivisionError):
+        return float("nan"), False, token
+    native = f"{_fraction_to_mixed_string(fraction)}\""
+    mapped = INCH_FRACTION_TO_MM.get(fraction)
+    if mapped is not None:
+        return float(mapped), True, native
+    return float(fraction * INCH_TO_MM), False, native
+
+
+def _parse_one_size(raw_token: str, *, assume_inch: bool = False):
+    raw_token = (raw_token or "").strip()
+    if not raw_token:
+        return None, None, True, None
+
+    s = normalize_text(raw_token)
+    s = s.replace("inches", "inch")
+    s = s.replace("″", '"').replace("”", '"').replace("“", '"')
+    s = s.replace("mm.", "mm")
+    s = s.replace("dia", "")
+    s = re.sub(r"[()]+", " ", s)
+    s = re.sub(r"\s+", " ", s).strip()
+
     m = re.fullmatch(r"(\d+(?:\.\d+)?)\s*mm", s)
     if m:
-        mm = float(m.group(1))
-        return mm, "mm", False
-    m = re.fullmatch(r'((?:\d+[\-\s])?\d+(?:/\d+)?)\s*(?:inch|")', s)
+        mm = _snap_mm(float(m.group(1)))
+        return mm, "mm", False, f"{_format_mm(mm)} mm"
+
+    m = re.fullmatch(r'((?:\d+[\-\s])?\d+(?:/\d+)?|\d+(?:\.\d+)?)\s*(?:inch|in|\")', s)
     if m:
-        inches = _parse_mixed_inches(m.group(1))
-        if not isnan(inches):
-            return inches * INCH_TO_MM, "inch", False
+        frac_token = m.group(1)
+        mm_val, mapped, native = _inch_to_mm(frac_token)
+        if not isnan(mm_val):
+            mm_val = _snap_mm(mm_val)
+            return mm_val, "inch", not mapped, native
+
+    if assume_inch:
+        m = re.fullmatch(r'(?:\d+[\-\s])?\d+(?:/\d+)?|\d+(?:\.\d+)?', s)
+        if m:
+            frac_token = m.group(0)
+            mm_val, mapped, native = _inch_to_mm(frac_token)
+            if not isnan(mm_val):
+                mm_val = _snap_mm(mm_val)
+                return mm_val, "inch", not mapped, native
+
     m = re.fullmatch(r"\d+(?:\.\d+)?", s)
     if m:
-        return None, None, True
-    return None, None, True
+        token_value = m.group(0)
+        if "." in token_value:
+            return None, None, True, raw_token
+        mm = _snap_mm(float(token_value))
+        return mm, "mm", False, f"{_format_mm(mm)} mm"
+
+    return None, None, True, raw_token or None
 
 def normalize_dimension(raw_dim: str):
     if not raw_dim:
-        return dict(primary_mm=None, secondary_mm=None, display=None, ambiguous=True)
-    s = normalize_text(raw_dim).replace("A-", "x")
-    parts = [p.strip() for p in re.split(r"\bx\b", s)]
-    vals, units, ambs = [], [], []
-    for p in parts[:2]:
-        v, u, a = _parse_one_size(p)
-        vals.append(v); units.append(u); ambs.append(a)
-    disp_parts = []
-    for v, u, a, src in zip(vals, units, ambs, parts[:2]):
-        if v is None and a:
-            disp_parts.append(f"{src} (?)")
-        elif u == "mm":
-            disp_parts.append(f"{v:g} mm")
-        elif u == "inch":
-            disp_parts.append(f"{v:g} mm")
+        return dict(primary_mm=None, secondary_mm=None, primary_native=None, secondary_native=None, primary_unit=None, secondary_unit=None, display=None, ambiguous=True)
+
+    inch_hint = bool(re.search(r'(?:"|inch)', raw_dim.lower())) or bool(re.search(r'/\d', raw_dim))
+    split_pattern = re.compile(r'[xX×✕✖✗✘⋅·∙*\ufffd]')
+    raw_parts = [p.strip() for p in split_pattern.split(raw_dim.replace('A-', 'x')) if p.strip()]
+
+    vals, units, natives, ambs = [], [], [], []
+    for raw_part in raw_parts[:2]:
+        v, u, a, native = _parse_one_size(raw_part, assume_inch=inch_hint)
+        v = _snap_mm(v) if v is not None else None
+        vals.append(v)
+        units.append(u)
+        natives.append(native)
+        ambs.append(a)
+
+    display_parts = []
+    for raw_part, native, v, unit, ambiguous in zip(raw_parts[:2], natives, vals, units, ambs):
+        if native:
+            display_parts.append(native)
+        elif v is not None:
+            label = 'mm' if unit in (None, 'mm') else unit
+            display_parts.append(f"{_format_mm(v)} {label}")
         else:
-            disp_parts.append(src)
-    display = " x ".join(disp_parts) if disp_parts else s
+            display_parts.append(f"{raw_part} (?)")
+
+    display = ' x '.join(display_parts) if display_parts else raw_dim.strip()
+
     return dict(
         primary_mm=vals[0] if vals else None,
         secondary_mm=vals[1] if len(vals) > 1 else None,
+        primary_native=natives[0] if natives else None,
+        secondary_native=natives[1] if len(natives) > 1 else None,
+        primary_unit=units[0] if units and units[0] else ('mm' if (vals and vals[0] is not None) else None),
+        secondary_unit=units[1] if len(units) > 1 and units[1] else ('mm' if len(vals) > 1 and vals[1] is not None else None),
         display=display,
         ambiguous=any(ambs) or all(v is None for v in vals),
     )
@@ -116,13 +247,15 @@ def try_infer_size_from_text(text: str):
     if m:
         inches = _parse_mixed_inches(m.group(1))
         if not isnan(inches):
-            mm = inches * INCH_TO_MM
-            return mm, None, f'{m.group(1)}" ({mm:g} mm)', False
+            mm = _snap_mm(inches * INCH_TO_MM)
+            native = f"{m.group(1)}\""
+            return mm, None, native, None, False
     m = re.search(r"(\d+(?:\.\d+)?)\s*mm", t)
     if m:
-        mm = float(m.group(1))
-        return mm, None, f"{mm:g} mm", False
-    return None, None, None, True
+        mm_val = _snap_mm(float(m.group(1)))
+        native = f"{m.group(1)} mm"
+        return mm_val, None, native, None, False
+    return None, None, None, None, True
 
 def parse_query(keyword: str):
     k = normalize_text(keyword)
@@ -135,12 +268,12 @@ def parse_query(keyword: str):
     if "x" in k:
         parts = [p.strip() for p in re.split(r"\bx\b", k)]
         for p in parts[:2]:
-            v, _, a = _parse_one_size(p)
+            v, _, a, _ = _parse_one_size(p)
             if not a and v is not None:
                 mm.append(v)
     if not mm:
         for tok in re.findall(r'((?:\d+[\-\s])?\d+(?:/\d+)?\s*(?:mm|inch|"))|\b\d+(?:\.\d+)?\b', k):
-            v, _, a = _parse_one_size(tok)
+            v, _, a, _ = _parse_one_size(tok)
             if not a and v is not None:
                 mm.append(v)
             if len(mm) == 2:

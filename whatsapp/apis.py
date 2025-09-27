@@ -66,7 +66,7 @@ class VendorQuoteResponse(BaseModel):
 
 router = APIRouter()
 
-@router.post("/api/quote-request")
+@router.post("/submit-order")
 async def submit_order(payload: SubmitOrderRequest):
     print("submit_order :::: payload :", payload)
     from database.models import RequestStatus
@@ -180,7 +180,7 @@ async def submit_order(payload: SubmitOrderRequest):
 
 
 
-@router.post("/api/quotes")
+@router.post("/vendor-quotes")
 async def vendor_quote_response(payload: VendorQuoteResponse):
     print(f"apis ::::: vendor_quote_response ::::: payload : {payload}")
     try:
@@ -196,7 +196,7 @@ async def vendor_quote_response(payload: VendorQuoteResponse):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.get("/api/quotes/{request_id}")
+@router.get("/vendor-quotes/{request_id}")
 async def get_vendor_quotes(request_id: UUID):
     print(f"apis ::::: get_vnedor_quotes ::::: request id : {request_id}")
     try:
@@ -207,7 +207,7 @@ async def get_vendor_quotes(request_id: UUID):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.get("/api/sku")
+@router.get("/sku")
 async def get_sku_details(
     keyword: str = Query(..., min_length=1, description="Free-form search (brand, size, grade, etc.)"),
     limit: int = Query(25, ge=1, le=100)
@@ -246,7 +246,7 @@ class ConfirmOrderRequest(BaseModel):
     expected_delivery_date: Optional[datetime] = None
 
 
-@router.post("/api/order-confirmation")
+@router.post("/confirm-order")
 async def confirm_order(payload: ConfirmOrderRequest):
     """
     Approve a single vendor for the given request, mark other vendor quotes as not selected,
