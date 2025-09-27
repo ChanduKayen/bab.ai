@@ -6,18 +6,37 @@ INCH_TO_MM = 25.4
 
 TYPE_ALIASES = {
     "pipe": "pipe", "pipes": "pipe",
-    "elbow": "elbow", "elbow 90": "elbow", "elbow 45": "elbow",
+    "elbow": "elbow", "elbow 90": "elbow-90", "elbow 45": "elbow-45",
     "tee": "tee", "tees": "tee", "tee fittings": "tee",
     "reducer": "reducer", "union": "union",
     "adapter": "adapter", "adaptor": "adapter",
     "coupling": "coupling", "couplings": "coupling",
     "nipple": "nipple", "cap": "cap", "plug": "plug",
     "bushing": "bushing", "valve": "valve",
+    "tap": "tap", "hose": "hose",
+}
+
+MATERIAL_KEYWORDS = {
+    "upvc": "uPVC",
+    "pvc-u": "uPVC",
+    "cpvc": "CPVC",
+    "hdpe": "HDPE",
+    "gi": "GI",
+    "galvanized": "GI",
+    "ss": "SS",
+    "stainless": "SS",
+    "brass": "Brass",
+    "pvc": "PVC",
+}
+
+VARIANT_KEYWORDS = {
+    "swr": "SWR",
+    "pressure": "Pressure",
 }
 
 def normalize_text(s: str) -> str:
     s = (s or "").strip().lower()
-    s = s.replace("″", '"').replace("”", '"')
+    s = s.replace("??3", '"').replace("???", '"')
     s = re.sub(r"\s+", " ", s)
     return s
 
@@ -67,7 +86,7 @@ def _parse_one_size(token: str):
 def normalize_dimension(raw_dim: str):
     if not raw_dim:
         return dict(primary_mm=None, secondary_mm=None, display=None, ambiguous=True)
-    s = normalize_text(raw_dim).replace("×", "x")
+    s = normalize_text(raw_dim).replace("A-", "x")
     parts = [p.strip() for p in re.split(r"\bx\b", s)]
     vals, units, ambs = [], [], []
     for p in parts[:2]:
@@ -129,8 +148,45 @@ def parse_query(keyword: str):
     q_p1 = mm[0] if mm else None
     q_p2 = mm[1] if len(mm) > 1 else None
     base = q_p1 if q_p1 else 25.0
-    tol = max(1.0, 0.02 * base)  # 2% or 1mm
-    return {"q_type": q_type, "q_p1": q_p1, "q_p2": q_p2, "tol": tol, "raw": keyword}
+    tol = max(1.0, 0.02 * base)
+
+    material = None
+    for token, canonical in MATERIAL_KEYWORDS.items():
+        if re.search(rf"\b{re.escape(token)}\b", k):
+            material = canonical
+            break
+
+    variant = None
+    for token, canonical in VARIANT_KEYWORDS.items():
+        if re.search(rf"\b{re.escape(token)}\b", k):
+            variant = canonical
+            break
+    if variant is None:
+        m = re.search(r"sdr\s*([0-9]+(?:\.[0-9]+)?)", k)
+        if m:
+            variant = f"SDR{m.group(1).replace(' ', '')}"
+    if variant is None:
+        m = re.search(r"pn\s*([0-9]+(?:\.[0-9]+)?)", k)
+        if m:
+            variant = f"PN {m.group(1)}"
+    if variant is None:
+        m = re.search(r"sch\s*([0-9]+)", k)
+        if m:
+            variant = f"SCH {m.group(1)}"
+
+    q_norm = " ".join(keyword.split()).lower()
+
+    return {
+        "raw": keyword,
+        "q_norm": q_norm,
+        "q_type": q_type,
+        "type_norm": q_type,
+        "q_p1": q_p1,
+        "q_p2": q_p2,
+        "tol": tol,
+        "material": material,
+        "variant": variant,
+    }
 
 def type_similarity(a: str, b: str) -> float:
     a = normalize_text(a); b = normalize_text(b)

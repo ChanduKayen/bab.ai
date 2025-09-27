@@ -5,7 +5,6 @@ import json
 import math
 import os
 import uuid
-import openpyxl
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
@@ -16,23 +15,18 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.engine.url import make_url
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
-# ──────────────────────────────────────────────────────────────────────────────
-# HARD-CODED EXCEL FILE PATH (set this to your local file)
-EXCEL_PATH = r"D:\\babai\\bab.ai\\outputs\\cleaned_sku_master_sorted.xlsx"
-EXCEL_SHEET = "Sheet1"  # None = first sheet
+EXCEL_PATH = r"D:\babai\prime\outputs\cleaned_sku_master_sorted_cleaned_descfix.xlsx"
+EXCEL_SHEET = "Sheet1"
 SCHEMA = "public"
 TABLE_NAME = "sku_master"
 BATCH_SIZE = 1000
-# ──────────────────────────────────────────────────────────────────────────────
 
-# Load DB URL from .env
 load_dotenv()
-DB_URL = os.getenv("DATABASE_URL")  # must be postgresql+asyncpg://...
+DB_URL = os.getenv("DATABASE_URL")
 
 REQUIRED_COLS = ("brand", "category", "uom_code", "attributes")
 
 
-# ───────────────────────────── helpers ─────────────────────────────
 def _require_asyncpg(url: str):
     if not url:
         raise RuntimeError("DATABASE_URL not set in environment or .env")
@@ -40,11 +34,8 @@ def _require_asyncpg(url: str):
     if u.get_dialect().driver != "asyncpg":
         raise RuntimeError("DATABASE_URL must use async driver 'asyncpg' (postgresql+asyncpg://...)")
 
+
 def _safe_json_obj(v: Any) -> Optional[Dict[str, Any]]:
-    """
-    Accept dict or a JSON string that decodes to an object.
-    Returns dict or None (invalid/blank). No normalization or fixes.
-    """
     if v is None:
         return None
     if isinstance(v, dict):
@@ -57,6 +48,7 @@ def _safe_json_obj(v: Any) -> Optional[Dict[str, Any]]:
         return j if isinstance(j, dict) else None
     except Exception:
         return None
+
 
 def _read_excel_rows(path: str, sheet_name: Optional[str]) -> List[Dict[str, Any]]:
     if not os.path.exists(path):
@@ -74,52 +66,65 @@ def _read_excel_rows(path: str, sheet_name: Optional[str]) -> List[Dict[str, Any
         rows.append(d)
     return rows
 
+
 async def _reflect_table(engine: AsyncEngine, schema: str, table_name: str) -> Table:
     def _do_reflect(sync_conn):
         md = MetaData(schema=schema)
         return Table(table_name, md, autoload_with=sync_conn, schema=schema)
+
     async with engine.connect() as conn:
         return await conn.run_sync(_do_reflect)
 
+
+def _safe_number(value: Optional[str]) -> Optional[float]:
+    if value in (None, "", "NaN"):
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _clean_text(value: Optional[str]) -> Optional[str]:
+    if value is None:
+        return None
+    s = str(value).strip()
+    if not s or s.lower() == "nan":
+        return None
+    return s
+
+
 def _build_record(row: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    """
-    Build an insert dict from a raw row (no data modifications).
-    Required: brand, category, uom_code, attributes(JSON object).
-    """
-    # Ensure required columns exist on the row
     for key in REQUIRED_COLS:
         if key not in row:
             return None
 
-    brand = (row.get("brand") or "").strip()
-    category = (row.get("category") or "").strip()
-    uom_code = (row.get("uom_code") or "").strip()
+    brand = _clean_text(row.get("brand")) or ""
+    category = _clean_text(row.get("category")) or ""
+    uom_code = _clean_text(row.get("uom_code")) or ""
     attrs = _safe_json_obj(row.get("attributes"))
 
     if not brand or not category or not uom_code or attrs is None:
         return None
 
-    # sku_id: keep if present, else UUIDv4
-    sku_id = (str(row.get("sku_id")).strip() if row.get("sku_id") else str(uuid.uuid4()))
+    sku_id = (_clean_text(row.get("sku_id")) or str(uuid.uuid4()))
 
-    # pack_uom: keep as-is (default 'kg' if blank)
-    pack_uom = (row.get("pack_uom") or "kg").strip() or "kg"
+    pack_uom = _clean_text(row.get("pack_uom")) or "kg"
 
-    # pack_qty: strictly integer-like; default to 1 if blank/unparseable
     try:
         pq_raw = row.get("pack_qty")
         pack_qty = int(float(pq_raw)) if pq_raw not in (None, "", "NaN") else 1
     except Exception:
         pack_qty = 1
 
-    description = (None if not row.get("description") else str(row.get("description")))
-    canonical_key = (None if not row.get("canonical_key") else str(row.get("canonical_key")))
-    status = (row.get("status") or "active").strip().lower()
+    description = _clean_text(row.get("description"))
+    canonical_key = _clean_text(row.get("canonical_key"))
+    status = (_clean_text(row.get("status")) or "active").lower()
     if status not in ("active", "retired"):
         status = "active"
 
     ambiguous_raw = row.get("ambiguous")
-    ambiguous_val = None
+    ambiguous_val: Optional[bool] = None
     if isinstance(ambiguous_raw, str):
         cleaned = ambiguous_raw.strip().lower()
         if cleaned in ("true", "1", "yes"):
@@ -129,8 +134,34 @@ def _build_record(row: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     elif isinstance(ambiguous_raw, (bool, int)):
         ambiguous_val = bool(ambiguous_raw)
 
+    type_norm = _clean_text(row.get("type_norm"))
+
+    size_mm_primary = _safe_number(row.get("size_mm_primary"))
+    size_mm_secondary = _safe_number(row.get("size_mm_secondary"))
+
+    primary_size_native = _safe_number(row.get("primary_size_native"))
+    primary_size_unit = _clean_text(row.get("primary_size_unit"))
+    if primary_size_native is None and size_mm_primary is not None:
+        primary_size_native = size_mm_primary
+        primary_size_unit = primary_size_unit or "mm"
+
+    secondary_size_native = _safe_number(row.get("secondary_size_native"))
+    secondary_size_unit = _clean_text(row.get("secondary_size_unit"))
+    if secondary_size_native is None and size_mm_secondary is not None:
+        secondary_size_native = size_mm_secondary
+        secondary_size_unit = secondary_size_unit or "mm"
+
+    fragments = [brand, category, type_norm or "", (attrs.get("type") if attrs else ""), (attrs.get("variant") if attrs else ""), (attrs.get("raw_dimension") if attrs else ""), description or ""]
+    if size_mm_primary is not None:
+        fragments.append(f"{size_mm_primary:g} mm")
+    if size_mm_secondary is not None:
+        fragments.append(f"{size_mm_secondary:g} mm")
+    search_text = " ".join(str(f).strip() for f in fragments if f and str(f).strip())
+    if not search_text:
+        search_text = None
+
     now = datetime.utcnow()
-    return {
+    record: Dict[str, Any] = {
         "sku_id": sku_id,
         "brand": brand,
         "category": category,
@@ -138,16 +169,24 @@ def _build_record(row: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         "pack_qty": pack_qty,
         "pack_uom": pack_uom,
         "description": description,
-        "attributes": attrs,           # dict ? JSONB
+        "attributes": attrs,
         "canonical_key": canonical_key,
         "status": status,
         "ambiguous": ambiguous_val,
+        "type_norm": type_norm,
+        "size_mm_primary": size_mm_primary,
+        "size_mm_secondary": size_mm_secondary,
+        "primary_size_native": primary_size_native,
+        "primary_size_unit": primary_size_unit,
+        "secondary_size_native": secondary_size_native,
+        "secondary_size_unit": secondary_size_unit,
+        "search_text": search_text,
         "created_at": now,
         "updated_at": now,
     }
+    return record
 
 
-# ───────────────────────────── inserter ─────────────────────────────
 async def insert_excel_into_sku_master(
     excel_path: str,
     sheet_name: Optional[str] = None,
@@ -158,7 +197,6 @@ async def insert_excel_into_sku_master(
     _require_asyncpg(DB_URL)
     engine = create_async_engine(DB_URL, future=True)
 
-    # Read Excel
     rows = _read_excel_rows(excel_path, sheet_name)
 
     processed = 0
@@ -177,7 +215,6 @@ async def insert_excel_into_sku_master(
         await engine.dispose()
         return {"processed": processed, "inserted": 0, "skipped": skipped}
 
-    # Reflect table and insert with ON CONFLICT DO NOTHING
     table = await _reflect_table(engine, schema, table_name)
 
     inserted = 0
@@ -186,19 +223,18 @@ async def insert_excel_into_sku_master(
             batch = payloads[i : i + batch_size]
             stmt = pg_insert(table).values(batch).on_conflict_do_nothing(index_elements=[table.c.sku_id])
             await conn.execute(stmt)
-            inserted += len(batch)  # asyncpg rowcount is unreliable for DO NOTHING; assume all attempted
+            inserted += len(batch)
 
     await engine.dispose()
     return {"processed": processed, "inserted": inserted, "skipped": skipped}
 
 
-# ───────────────────────────── entrypoint ─────────────────────────────
 async def main():
     print(f"Excel file: {EXCEL_PATH}")
-    print("Loading DATABASE_URL from .env …")
+    print("Loading DATABASE_URL from .env ...")
     stats = await insert_excel_into_sku_master(EXCEL_PATH, EXCEL_SHEET)
     print(stats)
 
+
 if __name__ == "__main__":
     asyncio.run(main())
-

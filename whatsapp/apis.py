@@ -215,7 +215,7 @@ async def get_sku_details(
     try:
         async with AsyncSessionLocal() as session:
             crud = SkuCRUD(session)  
-            results = await crud.search_skus_score(keyword, limit=limit)
+            results = await crud.search_skus_score_sql(keyword, limit=limit)
             return {"count": len(results), "items": results}
     except Exception as e:
         print(f"apis ::::: get_sku_details ::::: exception caught : {e}")

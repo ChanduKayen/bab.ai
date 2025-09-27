@@ -4,7 +4,7 @@ from sqlalchemy import (
     ARRAY, Boolean, Column, String, Text, Integer, BigInteger, ForeignKey, Date, 
     Index, Enum, JSON, text, DateTime, UniqueConstraint, Float, Numeric, CheckConstraint)
 from sqlalchemy.orm import DeclarativeBase, Mapped, relationship, declarative_base, mapped_column
-from sqlalchemy.dialects.postgresql import UUID, JSONB
+from sqlalchemy.dialects.postgresql import UUID, JSONB, TSVECTOR
 from sqlalchemy.schema import MetaData
 from enum import Enum as PyEnum
 import uuid
@@ -408,6 +408,15 @@ class SkuMaster(Base):
 
     # Marks placeholder/low-confidence SKUs created from uncertain matches
     ambiguous    = Column(Boolean, nullable=False, default=False)
+    type_norm    = Column(String, nullable=True)
+    size_mm_primary = Column(Numeric, nullable=True)
+    size_mm_secondary = Column(Numeric, nullable=True)
+    primary_size_native = Column(Numeric, nullable=True)
+    primary_size_unit   = Column(String, nullable=True)
+    secondary_size_native = Column(Numeric, nullable=True)
+    secondary_size_unit   = Column(String, nullable=True)
+    search_text  = Column(Text, nullable=True)
+    tsv          = Column(TSVECTOR)
 
     # active | retired
     status       = Column(String, nullable=False, default="active")
@@ -418,6 +427,12 @@ class SkuMaster(Base):
         Index("idx_sku_cankey", "canonical_key"),
         Index("idx_sku_attrs", "attributes", postgresql_using="gin"),
         Index("idx_sku_ambiguous", "ambiguous"),
+        Index("idx_sku_type_norm", "type_norm"),
+        Index("idx_sku_size_mm", "size_mm_primary", "size_mm_secondary"),
+        Index("idx_sku_primary_size", "primary_size_unit", "primary_size_native"),
+        Index("idx_sku_secondary_size", "secondary_size_unit", "secondary_size_native"),
+        Index("idx_sku_search_trgm", "search_text", postgresql_using="gin", postgresql_ops={"search_text": "gin_trgm_ops"}),
+        Index("idx_sku_tsv", "tsv", postgresql_using="gin"),
         CheckConstraint("status IN ('active','retired')", name="ck_sku_status"),
     )
 
@@ -542,4 +557,5 @@ class SkuAlias(Base):
         Index("idx_sku_alias_master", "master_sku_id"),
         Index("idx_sku_alias_text", "alias_text"),
     )
+
 
