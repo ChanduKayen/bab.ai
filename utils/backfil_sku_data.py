@@ -16,6 +16,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 
+import copy
 import json
 import math
 import os
@@ -87,9 +88,22 @@ def _numeric_equal(a: Optional[float], b: Optional[float], tol: float = 1e-6) ->
     return math.isclose(a, b, rel_tol=0.0, abs_tol=tol)
 
 
-def _derive_type_norm(attrs: Dict[str, Any]) -> Optional[str]:
+def _derive_type_norm(attrs: Dict[str, Any], category: Optional[str]) -> Optional[str]:
     parts = [attrs.get("type"), attrs.get("sub_type")]
     type_norm = normalize_type(" ".join(p for p in parts if p))
+
+    if not type_norm and category:
+        cat_lower = category.lower()
+        if "pipe" in cat_lower:
+            type_norm = "pipe"
+        elif "valve" in cat_lower:
+            type_norm = "valve"
+
+    if type_norm == "pipe" and not attrs.get("type"):
+        attrs["type"] = "Pipe"
+    elif type_norm and not attrs.get("type"):
+        attrs["type"] = type_norm.replace("-", " ").title()
+
     return type_norm or None
 
 
@@ -151,7 +165,8 @@ def _derive_sizes(attrs: Dict[str, Any], description: Optional[str]) -> Dict[str
 
 def _compute_updates(row: Dict[str, Any]) -> Dict[str, Any]:
     attrs = _load_attrs(row.get("attributes"))
-    type_norm = _derive_type_norm(attrs)
+    original_attrs = copy.deepcopy(attrs)
+    type_norm = _derive_type_norm(attrs, row.get("category"))
     sizes = _derive_sizes(attrs, row.get("description"))
 
     current_type = row.get("type_norm") or None
@@ -190,8 +205,15 @@ def _compute_updates(row: Dict[str, Any]) -> Dict[str, Any]:
     if (new_unit_p2 or current_unit_p2) and new_unit_p2 != current_unit_p2:
         updates["secondary_size_unit"] = new_unit_p2
 
+    attrs_changed = False
     if dimension_display and attrs.get("dimension") != dimension_display:
         attrs["dimension"] = dimension_display
+        attrs_changed = True
+
+    if attrs != original_attrs:
+        attrs_changed = True
+
+    if attrs_changed:
         updates["attributes"] = attrs
 
     return updates
@@ -209,6 +231,7 @@ def _select_stmt(offset: int, limit: int):
     return (
         select(
             SkuMaster.sku_id,
+            SkuMaster.category,
             SkuMaster.description,
             SkuMaster.attributes,
             SkuMaster.type_norm,

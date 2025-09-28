@@ -156,7 +156,12 @@ def _inch_to_mm(token: str):
     return float(fraction * INCH_TO_MM), False, native
 
 
-def _parse_one_size(raw_token: str, *, assume_inch: bool = False):
+def _parse_one_size(
+    raw_token: str,
+    *,
+    assume_inch: bool = False,
+    allow_unitless_numeric: bool = True,
+):
     raw_token = (raw_token or "").strip()
     if not raw_token:
         return None, None, True, None
@@ -192,7 +197,7 @@ def _parse_one_size(raw_token: str, *, assume_inch: bool = False):
                 return mm_val, "inch", not mapped, native
 
     m = re.fullmatch(r"\d+(?:\.\d+)?", s)
-    if m:
+    if m and allow_unitless_numeric:
         token_value = m.group(0)
         if "." in token_value:
             return None, None, True, raw_token
@@ -268,12 +273,12 @@ def parse_query(keyword: str):
     if "x" in k:
         parts = [p.strip() for p in re.split(r"\bx\b", k)]
         for p in parts[:2]:
-            v, _, a, _ = _parse_one_size(p)
+            v, _, a, _ = _parse_one_size(p, allow_unitless_numeric=False)
             if not a and v is not None:
                 mm.append(v)
     if not mm:
         for tok in re.findall(r'((?:\d+[\-\s])?\d+(?:/\d+)?\s*(?:mm|inch|"))|\b\d+(?:\.\d+)?\b', k):
-            v, _, a, _ = _parse_one_size(tok)
+            v, _, a, _ = _parse_one_size(tok, allow_unitless_numeric=False)
             if not a and v is not None:
                 mm.append(v)
             if len(mm) == 2:
@@ -308,6 +313,8 @@ def parse_query(keyword: str):
             variant = f"SCH {m.group(1)}"
 
     q_norm = " ".join(keyword.split()).lower()
+    raw_tokens = re.findall(r"[a-z0-9]+", keyword.lower())
+    keyword_tokens = [t for t in raw_tokens if not t.isdigit()]
 
     return {
         "raw": keyword,
@@ -319,6 +326,7 @@ def parse_query(keyword: str):
         "tol": tol,
         "material": material,
         "variant": variant,
+        "tokens": keyword_tokens,
     }
 
 def type_similarity(a: str, b: str) -> float:

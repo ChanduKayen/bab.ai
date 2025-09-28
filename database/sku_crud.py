@@ -1,48 +1,20 @@
 # crud/sku.py
 
 import datetime
-
 import json
-
 from uuid import uuid4
-
 from decimal import Decimal
-
 from typing import List, Dict, Any
-
 import re
-
 from sqlalchemy.dialects.postgresql import insert as pg_insert
-
 from sqlalchemy import select, or_, and_, case, cast, String, desc, func, text
-
 from sqlalchemy.ext.asyncio import AsyncSession
-
 from utils.sku_normalizer import (
     normalize_type, normalize_dimension, try_infer_size_from_text,
     parse_query, type_similarity
-
 )
-
 from database.models import SkuMaster, SkuVendorPrice, MaterialRequestItem
-
 from sqlalchemy import update as sa_update
-
-def _tokenize(q: str) -> List[str]:
-    """
-    Simple, robust tokenizer for SKU search:
-    - lowercase
-    - keep numbers, letters, '/' and '"' (so 1/2" survives), collapse spaces
-    - split on anything else
-    """
-    q = q.strip().lower()
-    # normalize common inch symbols and spaces: 1/2", 1/2 in, 1/2 inch -> 1/2"
-    q = q.replace(" inch", '"').replace(" in", '"').replace("″", '"').replace("”", '"')
-    # collapse multiple spaces
-    q = re.sub(r"\s+", " ", q)
-    # split on non [a-z0-9/"-]
-    tokens = re.split(r"[^a-z0-9/\".-]+", q)
-    return [t for t in tokens if t]
 
 DEFAULT_SIM_THRESHOLD = 0.12
 
@@ -207,6 +179,7 @@ class SkuCRUD:
         parts = [row.material_name or "", row.sub_type or "", row.dimensions or "", row.dimension_units or ""]
         q = " ".join([p for p in parts if p]).strip()
         return q
+    
     async def _upsert_price(self, request_id, vendor_id, request_item_id, sku_id: str, quoted_price: float, price_unit: str, tag: str, resolved: bool):
         sku = await self.session.scalar(select(SkuMaster).where(SkuMaster.sku_id == sku_id))
         if not sku:
@@ -245,6 +218,7 @@ class SkuCRUD:
         print(f"sku_crud ::::: upsert_price ::::: executing svp_stmt : {stmt}")
         await self.session.execute(stmt)
         print(f"sku_crud ::::: upsert_price ::::: upsert OK for sku_id={sku_id}")
+
     async def _create_ambiguous_sku(self, req_query: str, fallback_parse: dict | None = None) -> str:
         # Minimal viable SKU row with required fields
         sid = str(uuid4())
@@ -275,6 +249,7 @@ class SkuCRUD:
         self.session.add(sku)
         print(f"sku_crud ::::: _create_ambiguous_sku ::::: created sid={sid}, category={sku.category}, description={(sku.description or '')[:60]}")
         return sid
+    
     async def process_vendor_quote_item(self, request_id, vendor_id, item) -> None:
         """
         Thresholded match using search_skus_score(). Behavior:
@@ -326,6 +301,7 @@ class SkuCRUD:
         print(f"sku_crud ::::: process_vendor_quote_item ::::: low confidence match: creating ambiguous SKU for query '{query_text}' with score {score} (norm {score_norm})")
         sid = await self._create_ambiguous_sku(query_text)
         await self._upsert_price(request_id, vendor_id, req_item_id, sid, quoted_price, price_unit, (comments or query_text or "ambiguous"), False)
+
     # -------------------------------------------------------------
     # Alias/reconciliation helpers (manual/admin-triggered)
     # -------------------------------------------------------------
@@ -425,9 +401,59 @@ class SkuCRUD:
                     'type_hit': type_hit,
                 },
             })
+        if not items:
+            return items
+
+        keyword_lower = q.lower()
+
+        def _sizes_match(norm: Dict[str, Any]) -> bool:
+            base_tol = qinfo.get('tol') or 0.0
+            primary_query = qinfo.get('q_p1')
+            secondary_query = qinfo.get('q_p2')
+
+            if primary_query is not None:
+                primary_value = norm.get('size_mm_primary')
+                if primary_value is None:
+                    return False
+                tol = max(1.0, base_tol)
+                if abs(primary_value - primary_query) > tol:
+                    return False
+
+            if secondary_query is not None:
+                secondary_value = norm.get('size_mm_secondary')
+                if secondary_value is None:
+                    return False
+                tol = max(1.0, base_tol)
+                if abs(secondary_value - secondary_query) > tol:
+                    return False
+
+            return True
+
+        def _has_exact_match(candidate: Dict[str, Any]) -> bool:
+            attrs = candidate.get('attributes') or {}
+            norm = candidate.get('normalized') or {}
+
+            brand = (candidate.get('brand') or '').lower()
+            brand_match = bool(brand and brand in keyword_lower)
+
+            material_query = qinfo.get('material')
+            material_candidate = (attrs.get('material') or '').lower() if isinstance(attrs, dict) else ''
+            material_match = bool(material_query and material_candidate == material_query.lower())
+
+            type_query = qinfo.get('type_norm')
+            type_candidate = (norm.get('type_norm') or '').lower()
+            type_match = bool(type_query and type_candidate == type_query.lower())
+
+            dimension_match = _sizes_match(norm)
+
+            return brand_match and material_match and type_match and dimension_match
+
+        if _has_exact_match(items[0]):
+            return [items[0]]
+
         return items
-    async def insert_sku_vendor_price(self, request_id, vendor_id, item):
     
+    async def insert_sku_vendor_price(self, request_id, vendor_id, item):
         # validate SKU exists & active
         sku = await self.session.scalar(
         select(SkuMaster).where(
