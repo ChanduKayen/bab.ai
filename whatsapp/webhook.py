@@ -10,6 +10,7 @@ import logging
 router = APIRouter()
 from app.logging_config import logger
 import requests
+from pathlib import Path
 
 # Load environment variables
 load_dotenv()
@@ -47,6 +48,11 @@ WHATSAPP_API_URL = "https://graph.facebook.com/v19.0/768446403009450/messages"
 #ACCESS_TOKEN = "EAAIMZBw8BqsgBO4ZAdqhSNYjSuupWb2dw5btXJ6zyLUGwOUE5s5okrJnL4o4m89b14KQyZCjZBZAN3yZBCRanqLC82m59bGe4Rd2BPfRe3A3pvGFZCTf2xB7a6insIzesPDVMLIw4gwlMkkz7NGl3ZBLvP5MU8i3mZBMmUBShGeQkSlAyRhsXJtlsg8uGaAfYwTid8PZAGBKnbOR3LFpCgBD8ZCIMJh9xI0sHWy"  
 
 ACCESS_TOKEN = os.getenv("WHATSAPP_ACCESS_TOKEN")
+
+media_download_path = os.getenv("media_download_dir")
+if not media_download_path:
+    raise RuntimeError("Environment variable `media_download_dir` must be set.")
+MEDIA_DOWNLOAD_DIR = Path(media_download_path)
 
 # implementing a presistnace layer to preseve the chat history tha saves the state of messages for followup questions required by UOC manager 
 #r = redis.Redis(host='localhost', port=6379, decode_responses=True)
@@ -130,13 +136,13 @@ def download_whatsapp_image(media_id: str) -> str:
     
     #Downloading media content
     image_data = requests.get(media_url, headers=headers).content
-    filename = f"C:/Users/vlaks/OneDrive/Desktop/Bab.ai/{media_id}.jpg"
-    
+    filename = MEDIA_DOWNLOAD_DIR / f"{media_id}.jpg"
+
     with open(filename, "wb") as f:
         f.write(image_data)
     
     print(f" Webhook :::::: download_whatsapp_image::::: Saved image to {filename}")
-    return filename
+    return str(filename)
       
 async def run_agent_by_name(agent_name: str, state: dict) -> dict:
     """
@@ -307,7 +313,7 @@ async def handle_whatsapp_event(data: dict):
 
             # Download the file
             ext = ".pdf" if file_type == "pdf" else ".bin"
-            local_path = f"C:/Users/vlaks/OneDrive/Desktop/Bab.ai/{media_id}{ext}"
+            local_path = MEDIA_DOWNLOAD_DIR / f"{media_id}{ext}"
             try:
                 file_data = requests.get(media_url, timeout=10).content
                 with open(local_path, "wb") as fp:
@@ -321,7 +327,7 @@ async def handle_whatsapp_event(data: dict):
             if file_type == "pdf":
                 try:
                     import fitz  # PyMuPDF
-                    doc = fitz.open(local_path)
+                    doc = fitz.open(str(local_path))
                     pdf_text = "".join(page.get_text() for page in doc)
                     doc.close()
                     state["pdf_text"] = pdf_text
@@ -337,7 +343,7 @@ async def handle_whatsapp_event(data: dict):
             state["media_id"] = media_id
             state["file_name"] = file_name
             state["msg_type"] = file_type
-            state["media_url"] = local_path
+            state["media_url"] = str(local_path)
         else:
             return {"status": "ignored", "reason": f"Unsupported message type {msg_type}"}
 

@@ -22,10 +22,11 @@ AsyncSessionLocal = get_sessionmaker()
 
 from whatsapp import apis
 from whatsapp.builder_out import whatsapp_output
-from agents.credit_agent import  run_credit_agent
+from agents.credit_agent import run_credit_agent
 from whatsapp.engagement import run_with_engagement
 from utils.convo_router import route_and_respond
 from utils.content_card import generate_review_order_card
+from pathlib import Path
 
 # -----------------------------------------------------------------------------
 # Environment & Model Setup
@@ -33,6 +34,10 @@ from utils.content_card import generate_review_order_card
 load_dotenv()  # lodad environment variables from .env file
 #llm = ChatOpenAI(model="gpt-4", temperature=0)
 ACCESS_TOKEN = os.getenv("WHATSAPP_ACCESS_TOKEN")
+upload_dir_value = os.getenv("default_upload_dir")
+if not upload_dir_value:
+    raise RuntimeError("Environment variable `default_upload_dir` must be set.")
+UPLOAD_IMAGES_DIR = Path(upload_dir_value)
 # llm = ChatOpenAI(
 #     model="gpt-4o-mini", #gpt-5
 #     temperature=0,
@@ -681,22 +686,22 @@ _Next, choose an action:_
             """
            
             path = generate_review_order_card(
-    out_dir="C:/Users/vlaks/OneDrive/Desktop/Bab.ai/upload_images",
-    variant="waba_header2x",  # 1600x836 (2x 800x418)
-    brand_name="bab-ai.com Procurement System",
-    brand_pill_text="Procurement",
-    heading="Review Order",
-    site_name="AS Elite, Kakinada",
-    order_id="MR-08A972B5",
-    items_count_text="3 materials",
-    delivery_text="Fri, 22 Aug",
-    quotes_text="3 in (best ₹—)",
-    payment_text="Credit available",
-    items=items,
-    total_value="₹ 3,45,600",
-    total_subnote="incl. GST • freight extra",
-    quotes_ready_count=3,
-)
+                out_dir=str(UPLOAD_IMAGES_DIR),
+                variant="waba_header2x",  # 1600x836 (2x 800x418)
+                brand_name="bab-ai.com Procurement System",
+                brand_pill_text="Procurement",
+                heading="Review Order",
+                site_name="AS Elite, Kakinada",
+                order_id="MR-08A972B5",
+                items_count_text="3 materials",
+                delivery_text="Fri, 22 Aug",
+                quotes_text="3 in (best ₹—)",
+                payment_text="Credit available",
+                items=items,
+                total_value="₹ 3,45,600",
+                total_subnote="incl. GST • freight extra",
+                quotes_ready_count=3,
+            )
 
             media_id = upload_media_from_path( path, "image/jpeg")
 
