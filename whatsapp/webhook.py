@@ -49,10 +49,10 @@ WHATSAPP_API_URL = "https://graph.facebook.com/v19.0/768446403009450/messages"
 
 ACCESS_TOKEN = os.getenv("WHATSAPP_ACCESS_TOKEN")
 
-media_download_path = os.getenv("media_download_dir")
-if not media_download_path:
-    raise RuntimeError("Environment variable `media_download_dir` must be set.")
-MEDIA_DOWNLOAD_DIR = Path(media_download_path)
+MEDIA_DOWNLOAD_PATH = os.getenv("MEDIA_DOWNLOAD_DIR")
+if not MEDIA_DOWNLOAD_PATH:
+    raise RuntimeError("Environment variable `MEDIA_DOWNLOAD_DIR` must be set.")
+MEDIA_DOWNLOAD_DIR = Path(MEDIA_DOWNLOAD_PATH)
 
 # implementing a presistnace layer to preseve the chat history tha saves the state of messages for followup questions required by UOC manager 
 #r = redis.Redis(host='localhost', port=6379, decode_responses=True)

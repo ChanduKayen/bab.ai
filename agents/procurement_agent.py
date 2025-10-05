@@ -34,9 +34,9 @@ from pathlib import Path
 load_dotenv()  # lodad environment variables from .env file
 #llm = ChatOpenAI(model="gpt-4", temperature=0)
 ACCESS_TOKEN = os.getenv("WHATSAPP_ACCESS_TOKEN")
-upload_dir_value = os.getenv("default_upload_dir")
+upload_dir_value = os.getenv("DEFAULT_UPLOAD_DIR")
 if not upload_dir_value:
-    raise RuntimeError("Environment variable `default_upload_dir` must be set.")
+    raise RuntimeError("Environment variable `DEFAULT_UPLOAD_DIR` must be set.")
 UPLOAD_IMAGES_DIR = Path(upload_dir_value)
 # llm = ChatOpenAI(
 #     model="gpt-4o-mini", #gpt-5

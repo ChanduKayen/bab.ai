@@ -208,7 +208,7 @@ class ProcurementCRUD:
                 else:
                     row_id = uuid4()  # generate for truly new rows
 
-                print(f"procurement_crud ::::: payload status {src.get("status")}")
+                print(f"procurement_crud ::::: payload status {src.get('status')}")
                 status_val = src.get("status")
                 if default_status is not None:
                     status_val = default_status

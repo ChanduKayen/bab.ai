@@ -6,7 +6,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-DEFAULT_UPLOAD_DIR = os.getenv("default_upload_dir")
+DEFAULT_UPLOAD_DIR = os.getenv("DEFAULT_UPLOAD_DIR")
 if not DEFAULT_UPLOAD_DIR:
     raise RuntimeError("Environment variable `default_upload_dir` must be set.")
 
