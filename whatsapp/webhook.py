@@ -133,14 +133,34 @@ def download_whatsapp_image(media_id: str) -> str:
         return None
 
     media_url = res.json().get("url")
-    
-    #Downloading media content
-    image_data = requests.get(media_url, headers=headers).content
+    if not media_url:
+        print("Webhook :::::: download_whatsapp_image::::: Media URL missing in response")
+        return None
+
+    try:
+        MEDIA_DOWNLOAD_DIR.mkdir(parents=True, exist_ok=True)
+    except Exception as err:
+        print("Webhook :::::: download_whatsapp_image::::: Failed to ensure download dir:", err)
+        return None
+
+    try:
+        media_res = requests.get(media_url, headers=headers, stream=True, timeout=30)
+        media_res.raise_for_status()
+    except Exception as err:
+        print("Webhook :::::: download_whatsapp_image::::: Failed to download media:", err)
+        return None
+
     filename = MEDIA_DOWNLOAD_DIR / f"{media_id}.jpg"
 
-    with open(filename, "wb") as f:
-        f.write(image_data)
-    
+    try:
+        with open(filename, "wb") as file_obj:
+            for chunk in media_res.iter_content(chunk_size=8192):
+                if chunk:
+                    file_obj.write(chunk)
+    except Exception as err:
+        print("Webhook :::::: download_whatsapp_image::::: Failed to save image:", err)
+        return None
+
     print(f" Webhook :::::: download_whatsapp_image::::: Saved image to {filename}")
     return str(filename)
       

@@ -3,7 +3,7 @@
 from urllib.parse import urlencode
 import requests
 from fastapi import APIRouter, HTTPException, Depends, Query
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import BaseModel, Field
 from uuid import UUID
 from datetime import datetime
 from typing import Any, Dict, Optional, List
@@ -15,7 +15,11 @@ from database.procurement_crud import ProcurementCRUD
 from database.uoc_crud import DatabaseCRUD as UocCRUD
 from database.sku_crud import SkuCRUD
 from database.models import RequestStatus
-from managers.quotation_handler import send_vendor_order_confirmation
+from managers.quotation_handler import (
+    handle_quote_flow,
+    notify_user_vendor_quote_update,
+    send_vendor_order_confirmation,
+)
 
 class MaterialItem(BaseModel):
     material_name: str
@@ -166,11 +170,18 @@ async def submit_order(payload: SubmitOrderRequest):
             #     "user_id": await crud.get_user_id_from_request(str(payload.request_id)),  # Optional helper
             #     "messages": [{"content": "Quote requested"}]
             # }
-            from managers.quotation_handler import handle_quote_flow
-            state={} 
-            
-            print(f"submit_order ::::: sender id : calling handle quote flow")
-            await handle_quote_flow(state, sender_id, vendor_targets, str(payload.request_id), [item.dict() for item in payload.items])
+            state = {}
+
+            print("submit_order ::::: sender id : calling handle quote flow")
+            await handle_quote_flow(
+                state,
+                sender_id,
+                vendor_targets,
+                str(payload.request_id),
+                [item.dict() for item in payload.items],
+                project_name=payload.project.name,
+                project_location=payload.project.location,
+            )
             print(f"submit_order ::::: sender id : handle quote flow done")
 
         return {"success": True, "message": "Procurement request submitted and quote flow started."}
@@ -186,11 +197,28 @@ async def vendor_quote_response(payload: VendorQuoteResponse):
     try:
         async with AsyncSessionLocal() as session:
             crud = ProcurementCRUD(session)
-            await crud.insert_vendor_quotes(
+            had_existing = await crud.insert_vendor_quotes(
                 request_id=payload.request_id,
                 vendor_id=payload.vendor_id,
-                items=payload.input
+                items=payload.input,
             )
+
+            summary = await crud.get_request_summary(payload.request_id)
+            vendor_record = await crud.get_vendor_by_id(payload.vendor_id)
+            user_id = summary.get("sender_id") if summary else None
+            if not user_id:
+                user_id = await crud.get_sender_id_from_request(str(payload.request_id))
+            vendor_name = getattr(vendor_record, "name", None)
+
+        await notify_user_vendor_quote_update(
+            user_id=user_id,
+            vendor_name=vendor_name,
+            request_id=str(payload.request_id),
+            project_name=summary.get("project_name") if summary else None,
+            project_location=summary.get("project_location") if summary else None,
+            is_update=had_existing,
+        )
+
         return {"success": True, "message": "Quote submitted successfully."}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -292,5 +320,3 @@ async def confirm_order(payload: ConfirmOrderRequest):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
     
-
-

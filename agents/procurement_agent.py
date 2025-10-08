@@ -326,6 +326,7 @@ STRICT RULES:
 - Omit fields if missing/unclear, never hallucinate.
 
 Schema:
+{items: 
 [
   {
     "material": "string",
@@ -334,8 +335,12 @@ Schema:
     "dimension_units": "string",
     "quantity": number,
     "quantity_units": "string"
-  }
-]
+  }, 
+  {...},
+  {...},
+  ...
+  ...
+]}
 
 Rules:
 - Your response MUST be a single JSON array at the top level. Do not wrap it inside an object.
