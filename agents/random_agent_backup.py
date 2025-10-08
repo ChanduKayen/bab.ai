@@ -110,27 +110,6 @@ IDENTIFIED_USER_PROMPT = "Write a warm 2-line message that welcomes back an iden
 ENGAGED_USER_PROMPT   = "Write a concise 2-line nudge for an engaged user, suggesting a high-value action. Output ONLY the message."
 TRUSTED_USER_PROMPT   = "Write a short 2-line message for a trusted user that offers a pro tip and a quick next step. Output ONLY the message."
 
-# ---------------------------- Conversational prompts --------------------------
-CONVERSATION_SYSTEM_PROMPT = (
-    "You are Bab.ai’s WhatsApp assistant for construction pros. "
-    "Respond naturally based on conversation so far, in the user's language. "
-    "Constraints: 1–2 short sentences, ≤120 characters, max one emoji, warm and helpful. "
-    "If useful, hint one relevant feature (site ops, procurement, or credit). "
-    "Never ask for sensitive PII unless clearly in a credit/KYC flow."
-)
-
-CONVERSATION_JSON_PROMPT = (
-    "Return ONLY a JSON object with this schema and nothing else:\n"
-    "{\n"
-    "  \"message\": \"<concise reply per constraints>\",\n"
-    "  \"cta\": { \n"
-    "    \"id\": \"<siteops|procurement|credit>\",\n"
-    "    \"title\": \"<≤20 chars, can include emoji>\"\n"
-    "  }\n"
-    "}\n"
-    "Rules: 1 emoji max; ≤120 chars; pick the most relevant CTA from context; use user's language."
-)
-
 # ------------------------------------------------------------------
 # Default CTAs
 # ------------------------------------------------------------------
@@ -272,83 +251,6 @@ def _last_user_text(state: AgentState) -> str:
         return "" 
     return (state["messages"][-1].get("content") or "").strip()
 
-async def _ainvoke_json(llm, messages):
-    """Prefer JSON-structured responses; fallback to plain if unsupported."""
-    try:
-        bound = llm.bind(response_format={"type": "json_object"})
-        return await bound.ainvoke(messages)
-    except Exception:
-        return await llm.ainvoke(messages)
-
-def _history_snippet(state: AgentState, limit: int = 4) -> str:
-    msgs = state.get("messages") or []
-    if not msgs:
-        return ""
-    hist = msgs[:-1]
-    lines = []
-    for m in hist[-limit:]:
-        text = (m.get("content") or "").strip()
-        if not text:
-            continue
-        lines.append(f"- {_cap_len(text, 160)}")
-    return "\n".join(lines)
-
-async def generate_conversational_reply_with_cta(state: AgentState) -> Dict[str, Any]:
-    last = _last_user_text(state)
-    history = _history_snippet(state)
-    prompt = (
-        f"Recent conversation (most recent last):\n{history}\n\n"
-        f"User's latest message:\n\"\"\"{last}\"\"\"\n\n"
-        "Follow the schema strictly."
-    )
-    res = await _ainvoke_json(llm, [
-        SystemMessage(content=CONVERSATION_SYSTEM_PROMPT + "\n\n" + CONVERSATION_JSON_PROMPT),
-        HumanMessage(content=prompt)
-    ])
-    data = strict_json(res.content) or {}
-    message = (data.get("message") or "").strip()
-    cta = data.get("cta") or {}
-    cta_id = str(cta.get("id") or "").strip().lower()
-    if cta_id not in {"siteops","procurement","credit"}:
-        low = (last or "").lower()
-        if any(k in low for k in ["photo","progress","site","work","crew","stock","update"]):
-            cta_id = "siteops"
-        elif any(k in low for k in ["price","quote","cement","steel","sand","order","boq","invoice"]):
-            cta_id = "procurement"
-        elif any(k in low for k in ["credit","limit","pay","kyc","loan"]):
-            cta_id = "credit"
-        else:
-            cta_id = "procurement"
-    default_title = DEFAULT_CTA[cta_id]["title"]
-    title = cta.get("title") or default_title
-    title = _cap_len(title, 20)
-    return {"message": message, "cta": {"id": cta_id, "title": title}}
-
-def _first_name(full: str) -> str:
-    s = (full or "there").strip()
-    return s.split()[0] if s else "there"
-
-def _quick_cta_from_text(last: str, state: AgentState) -> Dict[str, str]:
-    lk = (state.get("last_known_intent") or "").lower()
-    if lk in DEFAULT_CTA:
-        return DEFAULT_CTA[lk]
-    low = (last or "").lower()
-    if any(k in low for k in ["photo","progress","site","work","crew","stock","update"]):
-        return DEFAULT_CTA["siteops"]
-    if any(k in low for k in ["price","quote","cement","steel","sand","order","boq","invoice"]):
-        return DEFAULT_CTA["procurement"]
-    if any(k in low for k in ["credit","limit","pay","kyc","loan"]):
-        return DEFAULT_CTA["credit"]
-    return DEFAULT_CTA["procurement"]
-
-def _is_quick_ack_or_greet(text: str) -> bool:
-    t = (text or "").strip().lower()
-    if not t:
-        return False
-    acks = {"ok","okay","k","kk","thanks","thank you","thx","👍","👌","✅","done","cool","great","nice","super"}
-    greets = {"hi","hello","hey","yo","sup","good morning","good evening","good night"}
-    return t in acks or t in greets or (len(t) <= 4 and t in {"ok","k","kk"})
-
 # ------------------------------------------------------------------
 # Main entry
 # ------------------------------------------------------------------ 
@@ -357,12 +259,12 @@ async def classify_and_respond(state: AgentState, config: Optional[Dict[str, Any
     last_msg = _last_user_text(state)
     last_lower = last_msg.lower()
     log.debug("random_router:last_message: %s", last_lower)
-    intent = state.get("intent") or "random"
     print("Random Agent::: Classify and respond ::: Called ")
+    # --- 0) Button click direct routing (id equals handler key) ---
     if last_lower in _HANDLER_MAP:
         return await _HANDLER_MAP[last_lower](state, latest_response=state.get("latest_respons", ""), config=config)
 
-   
+    # --- 1) Image-only or empty message: nudge with single CTA ---
     image_present = bool(state.get("image_path"))
     if (not last_msg and not re.search(r"\w", last_msg or "")) and not image_present:
         state.update(
@@ -371,10 +273,76 @@ async def classify_and_respond(state: AgentState, config: Optional[Dict[str, Any
             uoc_next_message_extra_data=[{"id": "siteops", "title": "🏗 Manage My Site"}],
         )
         return state
-    if intent == "random":
-        if state.get("agent_first_run", True):
-            username = state.get("user_full_name", "there")
-            greeting_message = await generate_new_user_greeting(username)
+
+    # --- 2) Delegate to Convo Router FIRST (fast + deterministic) ---
+    # We pass the state; router will set intent/context/missing slots/etc.
+    try:
+        routed_state = await route_and_respond(dict(state))  # pass a shallow copy
+        # If Convo Router produced a concrete intent (not random/help), fast-route
+        intent = routed_state.get("latest_msg_intent") or routed_state.get("intent")
+        context = routed_state.get("intent_context")
+        resp_text = routed_state.get("latest_respons")
+        buttons = routed_state.get("uoc_next_message_extra_data") or []
+        # Concrete intents we can immediately hand off to downstream agents:
+        if intent in {"siteops", "procurement", "credit"} and resp_text:
+            msg = _clean_message(resp_text)
+            if intent == "siteops":
+                return await handle_siteops(state, msg, config, buttons[0] if buttons else None)
+            if intent == "procurement":
+                return await handle_procurement(state, msg, config, buttons[0] if buttons else None)
+            if intent == "credit":
+                return await handle_credit(state, msg, config, buttons[0] if buttons else None)
+
+        # If router says random/help, keep going and try the LLM concierge below.
+        # But keep the router's helpful text/buttons as fallback UI if LLM fails.
+        router_help_text = routed_state.get("latest_respons")
+        router_help_buttons = buttons
+    except Exception as e:
+        log.error("random_router: Convo Router delegation failed: %s", e)
+        router_help_text, router_help_buttons = None, None
+
+    # --- 3) LLM concierge fallback classification --- 
+    prompt = ROUTER_PROMPT + f"\nUSER_MESSAGE: {last_msg}"
+    try:
+        llm_resp = await llm.ainvoke([SystemMessage(content=prompt)])
+        data = strict_json(llm_resp.content)
+    except Exception as e:
+        log.error("random_router: LLM routing failure: %s", e)
+        data = {}
+
+    internal_msg_intent = data.get("internal_msg_intent", "random")
+    message = _clean_message(data.get("message") or "Got it!")
+    raw_cta = data.get("cta") or {}
+    cta_id = raw_cta.get("id") or internal_msg_intent
+    cta_title = (raw_cta.get("title") or DEFAULT_CTA.get(internal_msg_intent, DEFAULT_CTA["siteops"])["title"])[:20]
+    cta = {"id": cta_id, "title": cta_title}
+
+    # --- 4) Route if we have a concrete intent ---
+    if internal_msg_intent in _HANDLER_MAP:
+        # Log assistant message to history (keeps convo natural)
+        state.setdefault("messages", []).append({"role": "assistant", "content": message})
+        if internal_msg_intent == "siteops":
+            return await handle_siteops(state, message, config)
+        if internal_msg_intent == "procurement":
+            return await handle_procurement(state, message, config)
+        if internal_msg_intent == "credit":
+            return await handle_credit(state, message, config)
+
+    # --- 5) Onboarding / random path ---
+    user_stage = state.get("user_stage", "new")
+    if state.get("agent_first_run", True):
+        username = state.get("user_full_name", "there")
+        try:
+            if user_stage == "new":
+                greeting_message = await generate_new_user_greeting(username)
+            elif user_stage == "identified":
+                greeting_message = await generate_identified_user_greeting(username)
+            elif user_stage == "engaged":
+                greeting_message = await generate_engaged_user_greeting(username)
+            elif user_stage == "trusted":
+                greeting_message = await generate_trusted_user_greeting(username)
+            else:
+                greeting_message = await generate_new_user_greeting(username)
             state.update(
                 latest_respons=_clean_message(greeting_message),
                 uoc_next_message_type="button",
@@ -389,50 +357,16 @@ async def classify_and_respond(state: AgentState, config: Optional[Dict[str, Any
                 ],
             )
             return state
-        else:
-            # Efficiency: quick heuristic for short acks/greetings (no LLM call)
-            if _is_quick_ack_or_greet(last_msg):
-                cta = _quick_cta_from_text(last_msg, state)
-                name = _first_name(state.get("user_full_name", ""))
-                reply = f"Got it, {name}! Need anything else?"
-                state.update(
-                    latest_respons=_clean_message(reply),
-                    uoc_next_message_type="button",
-                    uoc_question_type=state.get("uoc_question_type") or "onboarding",
-                    needs_clarification=False,
-                    uoc_next_message_extra_data=[cta],
-                )
-                return state
+        except Exception as e:
+            log.error("random_router: greeting generation failed: %s", e)
 
-            # Efficiency: cache identical last message to avoid repeat LLM calls
-            if state.get("last_random_llm_input") == last_lower and state.get("last_random_llm_output"):
-                out = state["last_random_llm_output"]
-                state.update(
-                    latest_respons=_clean_message(out.get("message") or ""),
-                    uoc_next_message_type="button",
-                    uoc_question_type=state.get("uoc_question_type") or "onboarding",
-                    needs_clarification=False,
-                    uoc_next_message_extra_data=[out.get("cta") or DEFAULT_CTA["procurement"]],
-                )
-                return state
-
-            # Conversational LLM with CTA suggestion
-            out = await generate_conversational_reply_with_cta(state)
-            state.update(
-                latest_respons=_clean_message(out.get("message") or ""),
-                uoc_next_message_type="button",
-                uoc_question_type=state.get("uoc_question_type") or "onboarding",
-                needs_clarification=False,
-                uoc_next_message_extra_data=[out.get("cta") or DEFAULT_CTA["procurement"]],
-            )
-            # update cache
-            state["last_random_llm_input"] = last_lower
-            state["last_random_llm_output"] = out
-            return state
-
-    # Non-random intents → classify/respond via router
-    try:
-        state = await route_and_respond(state)
-    except Exception as e:
-        log.error("random_router: route_and_respond failed: %s", e)
+    # If everything else fails, use router help (if any) else LLM result
+    state.update(
+        intent="random",
+        latest_respons=router_help_text or message,
+        uoc_next_message_type="button",
+        uoc_question_type="onboarding",
+        needs_clarification=True,
+        uoc_next_message_extra_data=(router_help_buttons or [cta]),
+    )
     return state

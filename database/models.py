@@ -4,7 +4,7 @@ from sqlalchemy import (
     ARRAY, Boolean, Column, String, Text, Integer, BigInteger, ForeignKey, Date, 
     Index, Enum, JSON, text, DateTime, UniqueConstraint, Float, Numeric, CheckConstraint)
 from sqlalchemy.orm import DeclarativeBase, Mapped, relationship, declarative_base, mapped_column
-from sqlalchemy.dialects.postgresql import UUID, JSONB
+from sqlalchemy.dialects.postgresql import UUID, JSONB, TSVECTOR
 from sqlalchemy.schema import MetaData
 from enum import Enum as PyEnum
 import uuid
@@ -183,7 +183,7 @@ class MaterialRequest(Base):
     __tablename__ = "material_requests"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    project_id = Column(UUID(as_uuid=True), ForeignKey("public.projects.id", ondelete="SET NULL"), nullable=True)
+    project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id", ondelete="SET NULL"), nullable=True)
     
     sender_id = Column(String, nullable=False)  # WhatsApp user ID
     status = Column(Enum(RequestStatus), default=RequestStatus.DRAFT, nullable=False)  # draft / requested / quoted / approved
@@ -227,10 +227,11 @@ class MaterialRequestItem(Base):
     
     vendor_quote_items = relationship(
         "VendorQuoteItem",
-        back_populates="material_request_item",
-        cascade="all, delete-orphan", 
+        back_populates="request_item",
+        cascade="all, delete-orphan",
         passive_deletes=True,
     )
+
     __table_args__ = (
         Index("ix_mri_request_id", "material_request_id"),
     )
@@ -363,7 +364,7 @@ class VendorQuoteItem(Base):
     delivery_days = Column(Integer, nullable=True)    # e.g., 7 days
     delivery_date = Column(Date, nullable=True)      # alternative exact date
     comments      = Column(Text, nullable=True)       # vendor's comments or notes
-    status        = Column(Enum(QuoteStatus), default=RequestStatus.QUOTED, nullable=False)  # quoted / approved
+    status        = Column(Enum(QuoteStatus), default=QuoteStatus.QUOTED, nullable=False)  # quoted / approved
 
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
@@ -374,7 +375,7 @@ class VendorQuoteItem(Base):
 
     # Relationships
     request      = relationship("MaterialRequest", back_populates="vendor_quote_items")
-    request_item = relationship("MaterialRequestItem", backref="vendor_quotes")
+    request_item = relationship("MaterialRequestItem", back_populates="vendor_quote_items")
     vendor       = relationship("Vendor", back_populates="vendor_quote_items")
 
 
@@ -405,6 +406,18 @@ class SkuMaster(Base):
     # Identity string generated in app layer (e.g., lower(brand)|grade|size…)
     canonical_key = Column(String, nullable=True)
 
+    # Marks placeholder/low-confidence SKUs created from uncertain matches
+    ambiguous    = Column(Boolean, nullable=False, default=False)
+    type_norm    = Column(String, nullable=True)
+    size_mm_primary = Column(Numeric, nullable=True)
+    size_mm_secondary = Column(Numeric, nullable=True)
+    primary_size_native = Column(Text, nullable=True)
+    primary_size_unit   = Column(String, nullable=True)
+    secondary_size_native = Column(Text, nullable=True)
+    secondary_size_unit   = Column(String, nullable=True)
+    search_text  = Column(Text, nullable=True)
+    tsv          = Column(TSVECTOR)
+
     # active | retired
     status       = Column(String, nullable=False, default="active")
     created_at   = Column(DateTime, default=datetime.utcnow, nullable=False)
@@ -413,6 +426,13 @@ class SkuMaster(Base):
     __table_args__ = (
         Index("idx_sku_cankey", "canonical_key"),
         Index("idx_sku_attrs", "attributes", postgresql_using="gin"),
+        Index("idx_sku_ambiguous", "ambiguous"),
+        Index("idx_sku_type_norm", "type_norm"),
+        Index("idx_sku_size_mm", "size_mm_primary", "size_mm_secondary"),
+        Index("idx_sku_primary_size", "primary_size_unit", "primary_size_native"),
+        Index("idx_sku_secondary_size", "secondary_size_unit", "secondary_size_native"),
+        Index("idx_sku_search_trgm", "search_text", postgresql_using="gin", postgresql_ops={"search_text": "gin_trgm_ops"}),
+        Index("idx_sku_tsv", "tsv", postgresql_using="gin"),
         CheckConstraint("status IN ('active','retired')", name="ck_sku_status"),
     )
 
@@ -465,7 +485,7 @@ class CreditProfile(Base):
     __tablename__ = "credit_profiles"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    user_id = Column(UUID(as_uuid=True), ForeignKey("public.users.id", ondelete="CASCADE"), unique=True, nullable=False)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), unique=True, nullable=False)
     aadhaar = Column(String(20), nullable=True)
     pan = Column(String(10), nullable=True)
     gst = Column(String(20), nullable=True)
@@ -513,3 +533,28 @@ class PartnerStatusHistory(Base):
     "MaterialRequestItem",
     "VendorQuoteItem",
 ]
+
+
+# -------------------------------------------------------------------------
+# sku_alias  (alias terms mapped to canonical/master SKU)
+# -------------------------------------------------------------------------
+
+
+class SkuAlias(Base):
+    __tablename__ = "sku_alias"
+
+    id            = Column(BigInteger, primary_key=True, autoincrement=True)
+    master_sku_id = Column(String, ForeignKey("sku_master.sku_id", ondelete="CASCADE"), nullable=False)
+    alias_text    = Column(String, nullable=False)
+    region        = Column(String, nullable=True)   # optional locality tag (e.g., city/state)
+    vendor_id     = Column(UUID(as_uuid=True), ForeignKey("vendors.vendor_id", ondelete="SET NULL"), nullable=True)
+    confidence    = Column(Numeric, nullable=True)  # optional 0..1
+
+    created_at    = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at    = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+    __table_args__ = (
+        Index("idx_sku_alias_master", "master_sku_id"),
+        Index("idx_sku_alias_text", "alias_text"),
+    )
+

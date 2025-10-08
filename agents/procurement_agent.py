@@ -186,7 +186,7 @@ def _last_two_user_msgs(state: dict) -> tuple[str, str]:
 # External (WABA) Utility
 # -----------------------------------------------------------------------------
 def upload_media_from_path( file_path: str, mime_type: str = "image/jpeg") -> str:
-    url = f"https://graph.facebook.com/v19.0/712076848650669/media"
+    url = f"https://graph.facebook.com/v19.0/768446403009450/media"
     headers = {"Authorization": f"Bearer {ACCESS_TOKEN}"}
     files = {"file": (os.path.basename(file_path), open(file_path, "rb"), mime_type)}
     data = {"messaging_product": "whatsapp"}
@@ -264,7 +264,7 @@ async def handle_help(state: AgentState) -> AgentState:
 
     try:
         # Path to your ready MP4 file
-        media_path = r"C:\Users\koppi\OneDrive\Desktop\Bab.ai\Marketing\Quotations_tutorial.mp4"
+        media_path = r"C:\Users\vlaks\OneDrive\Desktop\Bab.ai\Marketing\Quotations_tutorial.mp4"
         
         # Upload to WABA
         media_id = upload_media_from_path(media_path, mime_type="video/mp4")
@@ -472,8 +472,9 @@ async def handle_rfq(state: AgentState, crud: ProcurementCRUD, latest_response: 
     """
     Handle the RFQ intent by updating the state and returning it.
     """
+    print("Procurement Agent::::: handle_rfq:::::  state recieved --", state)
     material_request_id = state["active_material_request_id"] if "active_material_request_id" in state else None
-    review_order_url = apis.get_review_order_url("https://www.bab-ai.com/orders/review-order", {}, {"uuid": state["active_material_request_id"]})
+    review_order_url = apis.get_review_order_url(os.getenv("REVIEW_ORDER_URL_BASE"), {}, {"senderId" : state.get("sender_id", ""), "uuid": state["active_material_request_id"]})
     review_order_url_response = """*Choose Vendors and proceed to palce order*"""
 
     state.update(
@@ -507,7 +508,8 @@ async def handle_order_edit(state: AgentState, crud: ProcurementCRUD, latest_res
     Handle the RFQ intent by updating the state and returning it.
     """
      material_request_id = state["active_material_request_id"] if "active_material_request_id" in state else None
-     review_order_url = apis.get_review_order_url("https://www.bab-ai.com/orders/review-order", {}, {"uuid": state["active_material_request_id"]})
+     print("Procurement Agent::::: handle_rfq:::::  edit order active_materail_request_id : ", material_request_id)
+     review_order_url = apis.get_review_order_url(os.getenv("REVIEW_ORDER_URL_BASE"), {}, {"senderId" : state.get("sender_id", ""), "uuid": state["active_material_request_id"]})
      review_order_url_response = """🔎 *Edit your Order Here*"""
 
      state.update(
@@ -542,6 +544,61 @@ async def new_user_flow(state: AgentState, crud: ProcurementCRUD  ) -> AgentStat
     sender_id = state["sender_id"]
     uoc_next_message_extra_data = state.get("uoc_next_message_extra_data", [])
     latest_response = state.get("latest_respons", None)
+    # Handle vendor acknowledgement buttons without changing webhook
+    if last_msg in ("vendor_confirm", "vendor_cannot_fulfill"):
+        ctx = state.get("vendor_ack_context", {}) or {}
+        req_id = ctx.get("request_id")
+        ven_id = ctx.get("vendor_id")
+        if not req_id or not ven_id:
+            state.update({
+                "latest_respons": "Context missing for this action. Please try again later.",
+                "uoc_next_message_type": "plain",
+                "needs_clarification": False,
+            })
+            return state
+
+        # Define notify_user_vendor_confirmed if not imported
+        async def notify_user_vendor_confirmed(user_id: str, request_id: str):
+            # Placeholder: send WhatsApp notification to user about vendor confirmation
+            message = f"✅ Your order {request_id} has been confirmed by the vendor."
+            whatsapp_output(user_id, message, message_type="plain")
+
+        # Define notify_user_vendor_declined if not imported
+        async def notify_user_vendor_declined(user_id: str, request_id: str):
+            # Placeholder: send WhatsApp notification to user about vendor decline
+            message = f"❌ Vendor cannot fulfill your order {request_id}. Please choose another vendor."
+            whatsapp_output(user_id, message, message_type="plain")
+
+        try:
+            async with AsyncSessionLocal() as session:
+                pcrud = ProcurementCRUD(session)
+                if last_msg == "vendor_confirm":
+                    user_id = await pcrud.get_sender_id_from_request(str(req_id))
+                    if user_id:
+                        await notify_user_vendor_confirmed(user_id=user_id, request_id=str(req_id))
+                    state.update({
+                        "latest_respons": "Thanks! Order confirmed. We will coordinate delivery.",
+                        "uoc_next_message_type": "plain",
+                        "needs_clarification": False,
+                    })
+                else:  # vendor_cannot_fulfill
+                    await pcrud.vendor_decline_and_reopen(request_id=str(req_id), vendor_id=str(ven_id))
+                    user_id = await pcrud.get_sender_id_from_request(str(req_id))
+                    if user_id:
+                        await notify_user_vendor_declined(user_id=user_id, request_id=str(req_id))
+                    state.update({
+                        "latest_respons": "Acknowledged. We’ve informed the buyer you can’t fulfill.",
+                        "uoc_next_message_type": "plain",
+                        "needs_clarification": False,
+                    })
+        except Exception as e:
+            print("procurement_agent ::::: vendor ack flow exception:", e)
+            state.update({
+                "latest_respons": "Sorry, something went wrong processing your response.",
+                "uoc_next_message_type": "plain",
+                "needs_clarification": False,
+            })
+        return state
     print("Procurement Agent:::: new_user_flow : last_msg is: -", last_msg)
     # print("Procurement Agent:::: new_user_flow : procurment conversation log  is: -", state.get("siteops_conversation_log", []))
     print("Procurement Agent:::: new_user_flow : the state received here is : -", state)
@@ -606,10 +663,9 @@ async def new_user_flow(state: AgentState, crud: ProcurementCRUD  ) -> AgentStat
             async with AsyncSessionLocal() as session:
                 procurement_mgr = ProcurementManager(session)
             print("Procurement Agent:::: new_user_flow :::: calling persist_procurement for material : ", state["procurement_details"]["materials"])
-            #material_request_id = await procurement_mgr.persist_procurement(state)
-            material_request_id ="Dummy"
-            state["active_material_request_id"] = material_request_id
-            print("Procurement Agent:::: new_user_flow : persist_procurement completed: ", material_request_id)
+            await procurement_mgr.persist_procurement(state)
+            # material_request_id ="Dummy"
+            print("Procurement Agent:::: new_user_flow : persist_procurement completed: ", state.get("active_material_request_id", None))
         except Exception as e:
             print("Procurement Agent:::: new_user_flow : Error in persist_procurement:", e)
             state["latest_respons"] = "Sorry, there was an error saving your procurement request. Please try again later."
@@ -658,7 +714,7 @@ _Next, choose an action:_
                 "media_type": "image",
                 },
                 "needs_clarification": True,
-                "active_material_request_id": material_request_id,
+                "active_material_request_id": state["active_material_request_id"],
                 "agent_first_run": False,
             })
         except Exception as e:
@@ -678,13 +734,10 @@ _Next, choose an action:_
                 return await _HANDLER_MAP[last_msg](state, crud, uoc_next_message_extra_data)
             else: 
                 print("Procurement Agent:::: new_user_flow : last_msg is not main_menu, handling it as a specific intent")
-        state["last_known_intent"] = "procurement"
-        state = await route_and_respond(state)
-
-        
- 
-
-        return state
+                state["last_known_intent"] = "procurement"
+                state = await route_and_respond(state)
+                return state
+            
         latest_msg_intent= state["intent"]
         latest_msg_context = state["intent_context"]
 
@@ -1032,6 +1085,7 @@ async def send_quote_request_to_vendor(state: dict):
 # -----------------------------------------------------------------------------
 async def run_procurement_agent(state: dict,  config: dict) -> dict:
     print("Procurement Agent:::: run_procurement_agent : called")
+    print("Procurement Agent:::: run_procurement_agent : state received =>", state)
     print("Procurement Agent:::: run_procurement_agent : config received =>", config)
     intent_context=""
     try:

@@ -74,7 +74,7 @@ USAGE PATTERNS (state → whatsapp_output):
 load_dotenv(override=True)
 
 # Replace with your phone number ID path (keep version aligned with your app)
-WHATSAPP_API_URL = "https://graph.facebook.com/v19.0/712076848650669/messages"
+WHATSAPP_API_URL = "https://graph.facebook.com/v19.0/768446403009450/messages"
 ACCESS_TOKEN = os.getenv("WHATSAPP_ACCESS_TOKEN")
 WABA_HEADER_TEXT_LIMIT = 60
 

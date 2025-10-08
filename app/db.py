@@ -26,7 +26,7 @@ def _ssl_args_for_postgres() -> dict:
     ctx = ssl.create_default_context()
  
     # Priority: explicit PEM path → PEM string → certifi bundle
-    ca_path = os.getenv("DB_SSLROOTCERT") 
+    ca_path = os.getenv("DB_SSLROOTCERT")  
     ca_pem  = os.getenv("DB_CA_PEM")
     if ca_pem:
         ctx.load_verify_locations(cadata=ca_pem)
