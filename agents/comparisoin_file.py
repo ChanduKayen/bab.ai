@@ -1,419 +1,295 @@
-from datetime import datetime, date
-from sqlalchemy import (
-    ARRAY, Boolean, CheckConstraint, Column, Numeric, String, Text, Integer, BigInteger, ForeignKey, Date,
-    Enum, JSON, text, DateTime, UniqueConstraint, Float, Index)
-from sqlalchemy.orm import DeclarativeBase, Mapped, relationship, declarative_base
-from sqlalchemy.dialects.postgresql import UUID, JSONB
-from sqlalchemy.schema import MetaData
-from enum import Enum as PyEnum
-import uuid
 
 
-class Base(DeclarativeBase):
-    pass
+from urllib.parse import urlencode
+import requests
+from fastapi import APIRouter, HTTPException, Depends, Query
+from pydantic import BaseModel, Field, ValidationError
+from uuid import UUID
+from datetime import datetime
+from typing import Any, Dict, Optional, List
+#from database._init_ import AsyncSessionLocal
+from app.db import get_sessionmaker
+AsyncSessionLocal = get_sessionmaker()
 
-Base = declarative_base(metadata=MetaData(schema="public"))
-# ---------- hierarchy -----------------------------------------------------
-class Project(Base):
-    __tablename__ = "projects"
+from database.procurement_crud import ProcurementCRUD
+from database.uoc_crud import DatabaseCRUD as UocCRUD
+from database.sku_crud import SkuCRUD
+from database.models import RequestStatus
+from managers.quotation_handler import send_vendor_order_confirmation
 
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    name = Column(String, nullable=False)
-    sender_id = Column(String, nullable=True)
-    location = Column(String, nullable=True)
-    no_of_blocks = Column(Integer, nullable=True)
-    floors_per_block = Column(Integer, nullable=True)
-    flats_per_floor = Column(Integer, nullable=True)
+class MaterialItem(BaseModel):
+    material_name: str
+    sub_type: Optional[str] = None
+    dimensions: Optional[str] = None
+    dimension_units: Optional[str] = None
+    quantity: float
+    quantity_units: Optional[str] = None
+    unit_price: Optional[float] = None
+    status: Optional[str] = None
+    vendor_notes: Optional[str] = None
 
-    created_at = Column(DateTime, default=datetime.utcnow)
+class Project(BaseModel):
+    id: str
+    name: Optional[str] = None
+    location: Optional[str] = None
 
+class Vendor(BaseModel):
+    vendor_id: UUID
+    name: Optional[str] = None
+    phone: Optional[str] = None
+    email: Optional[str] = None
 
-class Flat(Base):
-    __tablename__ = "flats"
-
-    id = Column(BigInteger, primary_key=True, autoincrement=True)
-    project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False)
-    block_name = Column(String, nullable=True)
-    floor_no = Column(Integer, nullable=False)
-    flat_no = Column(Integer, nullable=False)
-    bhk_type = Column(Text, nullable=False)
-    facing = Column(Text)
-    carpet_sft = Column(Integer)
-
-    project = relationship("Project", backref="flats")
-    regions = relationship("Region", back_populates="flat")
-
-    __table_args__ = (
-        UniqueConstraint('project_id', 'block_name', 'floor_no', 'flat_no', name='uq_flat_identity'),
-    )
-
-class Region(Base):
-    __tablename__ = "regions"
-
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    full_id = Column(Text, unique=True)
-    code = Column(Text, nullable=False)
-    project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False)
-    flat_id = Column(BigInteger, ForeignKey("flats.id", ondelete="CASCADE"), nullable=True)
-    block_name = Column(Text, nullable=True)
-    floor_no = Column(BigInteger, nullable=True)
-    meta = Column(JSON)
-    flat = relationship("Flat", back_populates="regions")
-    project = relationship("Project", backref="regions")
- 
-class Task(Base):
-    __tablename__ = "tasks"
-
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False)
-    region_id = Column(UUID(as_uuid=True), ForeignKey("regions.id", ondelete="SET NULL"))
+class SubmitOrderRequest(BaseModel):
+    request_id: UUID
+    sender_id: str
+    status: str
+    notes: Optional[str] = None
+    expected_delivery_date: Optional[datetime] = None
+    project: Project
+    vendors: List[Vendor] = Field(default_factory=list)
+    items: List[MaterialItem]
     
-    task_type = Column(String, nullable=False)  # e.g., "Plastering", "Wiring"
-    status = Column(String, default="Not Started")  # "Not Started", "In Progress", "Done" → validate in Python
-    department = Column(String, nullable=True)
-    dynamic_vars = Column(JSON, default=dict)
-    
-    created_at = Column(DateTime, default=datetime.utcnow)
+class VendorQuoteItem(BaseModel):
+    requested_item_id: UUID = Field(alias="requested_item_id")
+    quoted_price: float
+    price_units: Optional[str] = "unit"
+    delivery_days: Optional[int] = 0
+    comments: Optional[str] = None
 
-    project = relationship("Project", backref="tasks")
-    region = relationship("Region", backref="tasks")
-    jobs = relationship("Job", back_populates="task", cascade="all, delete-orphan")
+class VendorQuoteResponse(BaseModel):
+    request_id: UUID
+    vendor_id: UUID
+    input: List[VendorQuoteItem]
+
+    class Config:
+        allow_population_by_field_name = True
+
+router = APIRouter()
+
+@router.post("/submit-order")
+async def submit_order(payload: SubmitOrderRequest):
+    print("submit_order :::: payload :", payload)
+    from database.models import RequestStatus
+    try:
+        async with AsyncSessionLocal() as session:
+            crud = ProcurementCRUD(session)
+            uoc_crud = UocCRUD(session)
+            project_id = payload.project.id or None
+            #Update request metadata
+            if (payload.status!="DRAFT"):
+                return
+            
+            # Project handling policy for material requests:
+            # - If an ID is present: do NOT modify existing project details.
+            #   Validate it exists; otherwise, return an error.
+            # - If no ID: create a new project from provided fields.
+            if payload.project:
+                if project_id:
+                    existing = await uoc_crud.get_project(project_id)
+                    if not existing:
+                        raise HTTPException(status_code=404, detail="Project not found for provided project_id.")
+                    # Do not update existing project fields; only keep the ID
+                else:
+                    new_project = await uoc_crud.create_project({
+                        "name": payload.project.name or "Untitled Project",
+                        "sender_id": payload.sender_id,
+                        "location": payload.project.location,
+                        "no_of_blocks": None,
+                        "floors_per_block": None,
+                        "flats_per_floor": None,
+                    })
+                    project_id = new_project.id
+
+            print("apis ::::: submit_order ::::: updating procurement_reqeust")
+            await crud.update_procurement_request(
+                request_id=str(payload.request_id),
+                status=RequestStatus.REQUESTED,
+                project_id=project_id,
+                delivery_location=payload.project.location,
+                notes=payload.notes,
+                expected_delivery_date=payload.expected_delivery_date,
+                user_editable=False  # lock after submission
+            )
+
+            print("apis ::::: submit_order ::::: updating procurement_reqeust done ")
+            for item in payload.items:
+                item.status = RequestStatus.REQUESTED
+
+            print("apis ::::: submit_order ::::: items status updated. calling  sync")
+            #Update individual items
+            try:
+                await crud.sync_material_request_items_by_ids(
+                    request_id=str(payload.request_id),
+                    payload_items=[item.dict() for item in payload.items]
+                )
+            except Exception as e:
+                print(f"apis ::::: submit_order ::::: sync failed : {e}")
+                raise HTTPException(status_code=500, detail="Failed to sync procurement items.")
+            
+            print("apis ::::: submit_order :::::  sync finished")
+
+            vendor_targets: List[Dict[str, Optional[str]]] = []
+            vendor_ids = []
+            seen_vendor_ids = set()
+            for vendor in payload.vendors:
+                if not vendor.vendor_id:
+                    continue
+                vendor_ids.append(vendor.vendor_id)
+                vid_str = str(vendor.vendor_id)
+                if vid_str in seen_vendor_ids:
+                    continue
+                seen_vendor_ids.add(vid_str)
+                vendor_targets.append({
+                    "vendor_id": vid_str,
+                    "phone": vendor.phone,
+                    "name": vendor.name,
+                })
+
+            if vendor_ids:
+                await crud.add_quote_request_vendors(payload.request_id, vendor_ids)
+                print(f"apis ::::: submit_order ::::: vendor_ids persisted : {vendor_ids}")
+            else:
+                vendor_targets = []
+                print("apis ::::: submit_order ::::: no vendors provided in payload")
+
+            print(f"apis ::::: submit_order ::::: vendor targets : {vendor_targets}")
+            sender_id = payload.sender_id or await crud.get_sender_id_from_request(str(payload.request_id))
+            print(f"apis ::::: submit_order :::::  sender id : {sender_id}")
+            if not sender_id:
+                raise HTTPException(status_code=404, detail="Request ID not found; cannot resolve sender_id.")
+            print(f"submit_order ::::: sender id : {sender_id}, and request id : {payload.request_id}")
+            # #Update vendor UUIDs
+            # vendor_uuids = list({item.vendor_notes for item in payload.items if item.vendor_notes})
+
+            #Kickoff vendor quote flow
+            # state = {
+            #     "user_id": await crud.get_user_id_from_request(str(payload.request_id)),  # Optional helper
+            #     "messages": [{"content": "Quote requested"}]
+            # }
+            from managers.quotation_handler import handle_quote_flow
+            state={} 
+            
+            print(f"submit_order ::::: sender id : calling handle quote flow")
+            await handle_quote_flow(state, sender_id, vendor_targets, str(payload.request_id), [item.dict() for item in payload.items])
+            print(f"submit_order ::::: sender id : handle quote flow done")
+
+        return {"success": True, "message": "Procurement request submitted and quote flow started."}
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
-class Job(Base):
-    __tablename__ = "jobs"
 
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    task_id = Column(UUID(as_uuid=True), ForeignKey("tasks.id", ondelete="CASCADE"))
-    description = Column(Text)
-    material = Column(String)
-    worker = Column(String)
-    quality = Column(String)
-    time = Column(DateTime, default=datetime.utcnow)
-    confidence_flags = Column(JSON, default=dict)
-    raw_text = Column(Text)
+@router.post("/vendor-quotes")
+async def vendor_quote_response(payload: VendorQuoteResponse):
+    print(f"apis ::::: vendor_quote_response ::::: payload : {payload}")
+    try:
+        async with AsyncSessionLocal() as session:
+            crud = ProcurementCRUD(session)
+            await crud.insert_vendor_quotes(
+                request_id=payload.request_id,
+                vendor_id=payload.vendor_id,
+                items=payload.input
+            )
+        return {"success": True, "message": "Quote submitted successfully."}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
-    task = relationship("Task", back_populates="jobs")
+
+@router.get("/vendor-quotes/{request_id}")
+async def get_vendor_quotes(request_id: UUID):
+    print(f"apis ::::: get_vnedor_quotes ::::: request id : {request_id}")
+    try:
+        async with AsyncSessionLocal() as session:
+            crud = ProcurementCRUD(session)
+            return await crud.fetch_vendor_quotes_for_request(request_id)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
-class WorkerLog(Base):
-    __tablename__ = "worker_logs"
+@router.get("/sku")
+async def get_sku_details(
+    keyword: str = Query(..., min_length=1, description="Free-form search (brand, size, grade, etc.)"),
+    limit: int = Query(25, ge=1, le=100)
+) -> Dict[str, Any]:
+    try:
+        async with AsyncSessionLocal() as session:
+            crud = SkuCRUD(session)  
+            results = await crud.search_skus_score_sql(keyword, limit=limit)
+            return {"count": len(results), "items": results}
+    except Exception as e:
+        print(f"apis ::::: get_sku_details ::::: exception caught : {e}")
 
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False)
-    task_id = Column(UUID(as_uuid=True), ForeignKey("tasks.id", ondelete="SET NULL"))
 
-    # Replaced Enum with String
-    gender = Column(String, nullable=False)  # "Male", "Female", "Other" → validate in Python
-    skill_type = Column(String, nullable=False)  # "Skilled", "Unskilled" → validate in Python
-    job_role = Column(String, nullable=False)  # e.g., Mason, Electrician
-    count = Column(Integer, nullable=False, default=1)
-    contractor_name = Column(String, nullable=True)
-
-    log_date = Column(Date, default=date.today)
-    created_at = Column(DateTime, default=datetime.utcnow)
-
-    project = relationship("Project", backref="worker_logs")
-    task = relationship("Task", backref="worker_logs")
-
-class MaterialInventory(Base):
-    __tablename__ = "material_inventory"
-
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-
-    project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False)
-
-    name = Column(String, nullable=False)                  # e.g., Cement
-    specification = Column(String, nullable=True)          # e.g., OPC 53 Grade
-    unit = Column(String, nullable=False)                  # e.g., bags, tons, sqft
-    quantity = Column(Integer, default=0)                  # current available quantity
-
-    updated_at = Column(DateTime, default=datetime.utcnow)
-    
-    project = relationship("Project", backref="material_inventory")
-class Material(Base):
-    __tablename__ = "materials"
-
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    name = Column(String, nullable=False)
-    specification = Column(String)
-    unit = Column(String, nullable=False)
-    quantity_available = Column(Float, default=0.0)
-
-    logs = relationship("MaterialLog", back_populates="material", cascade="all, delete-orphan")
-
-class MaterialLog(Base):
-    __tablename__ = "material_logs"
-
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False)
-    task_id = Column(UUID(as_uuid=True), ForeignKey("tasks.id", ondelete="SET NULL"))
-    material_id = Column(UUID(as_uuid=True), ForeignKey("materials.id", ondelete="SET NULL"))
-
-    change_type = Column(String, nullable=False)  # "Usage", "Refill", "Wastage" → validate in Python
-    quantity = Column(Float, nullable=False)
-    unit = Column(String, nullable=False)
-    description = Column(String, nullable=True)
- 
-    log_date = Column(Date, default=date.today)
-    created_at = Column(DateTime, default=datetime.utcnow)
-
-    project = relationship("Project", backref="material_logs")
-    task = relationship("Task", backref="material_logs")
-    material = relationship("Material", backref="material_logs")
-
-class RequestStatus(PyEnum):
-    DRAFT = "draft"
-    REQUESTED = "requested"
-    QUOTED = "quoted"
-    APPROVED = "approved"
-
-class MaterialRequest(Base):
-    __tablename__ = "material_requests"
-
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"))
-    sender_id = Column(String, nullable=False)  # WhatsApp user ID
-    status = Column(Enum(RequestStatus), default=RequestStatus.DRAFT, nullable=False)  # draft / requested / quoted / approved
-    delivery_location = Column(String, nullable=True)
-    notes = Column(Text)
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
-    expected_delivery_date = Column(Date, nullable=True)
-    user_editable = Column(Boolean, default=True)
-    
-    items = relationship("MaterialRequestItem", back_populates="request", cascade="all, delete-orphan")
-    vendor_quote_items = relationship("VendorQuoteItem", back_populates="request", cascade="all, delete-orphan")
-
-class MaterialRequestItem(Base):
-    __tablename__ = "material_request_items"
-
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    material_request_id = Column(UUID(as_uuid=True), ForeignKey("material_requests.id", ondelete="CASCADE"))
-    material_name = Column(String, nullable=False)
-    sub_type = Column(String, nullable=True)  # e.g., OPC 53 Grade
-    dimensions = Column(String, nullable=True)  # e.g., 20, 10, 50
-    dimension_units = Column(String, nullable=True)  # e.g., mm, kg
-    quantity = Column(Float, nullable=False)
-    quantity_units = Column(String, nullable=True)  # e.g., units, bags
-    unit_price = Column(Float, nullable=True)  # till vendor give a quote
-    status = Column(Enum(RequestStatus), default=RequestStatus.DRAFT, nullable=False)  # draft / requested / quoted / approved
-    vendor_notes = Column(Text, nullable=True)
-     
-    request = relationship("MaterialRequest", back_populates="items")
-    
-class MaterialCategory(PyEnum):
-    SITE_PREPARATION = "Site Preparation & Earthwork"
-    SAND_GRAVEL = "Sand & Gravel"
-    CEMENT_CONCRETE = "Cement & Concrete"
-    STEEL_TMT = "Steel (TMT Bars & Binding Wire)"
-    BRICKS_BLOCKS = "Bricks / AAC Blocks / Red Bricks"
-    AGGREGATE_STONE = "Stone Aggregate"
-    FOUNDATION_CHEMICALS = "Waterproofing & Anti-termite Chemicals"
-    SHUTTERING_FORMWORK = "Shuttering / Formwork"
-    MASONRY = "Masonry & Mortar"
-    SCAFFOLDING = "Scaffolding"
-    RCC_COMPONENTS = "RCC & Structural Components"
-    PLASTER = "Cement Plaster & Wall Putty"
-    POP = "POP & Surface Prep"
-    PLUMBING_PIPES = "Plumbing Pipes & Fittings"
-    SANITARY_FIXTURES = "Sanitary Fixtures"
-    WATER_STORAGE = "Water Tanks & Pumps"
-    ELECTRICAL_WIRING = "Electrical Wires & Cables"
-    SWITCHES_FIXTURES = "Switches & Lighting Fixtures"
-    DOORS_WINDOWS = "Doors, Windows & Grills"
-    FLOORING_TILES = "Flooring & Wall Tiles"
-    TILE_ADHESIVES = "Tile Adhesives & Grouts"
-    PAINTS = "Paints & Primers"
-    WOOD_POLISH = "Wood Polish & Varnish"
-    HVAC = "HVAC & Ventilation"
-    PLYWOOD = "Plywood, MDF, Laminates"
-    MODULAR_UNITS = "Modular Kitchen & Wardrobe Units"
-    FALSE_CEILING = "False Ceilings (Gypsum, POP)"
-    CLEANING_MATERIALS = "Cleaning & Handover Materials"
-    SAFETY_EQUIPMENT = "Safety Equipment"
-    SOLAR_SYSTEMS = "Solar Panels & Inverters"
-    ELEVATORS = "Elevators / Lifts"
-    SMART_HOME = "Smart Home Devices"
-    SECURITY_SYSTEMS = "Security & Surveillance"
-
-class Vendor(Base):
-    __tablename__ = 'vendors'
-
-    vendor_id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    name = Column(String, nullable=False)
-    phone_number = Column(String(15))
-    email = Column(String)
-    address = Column(String)
-    pincode = Column(String(10), nullable=False)
-    material_categories = Column(ARRAY(Enum(MaterialCategory)), nullable=False)
-    gst_number = Column(String(20))
-    rating = Column(Float)
-    active = Column(Boolean, default=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
-
-    vendor_quote_items= relationship("VendorQuoteItem", back_populates="vendor", cascade="all, delete-orphan")
-    
-class UserCategory(PyEnum):
-    USER = "USER"
-    SUPERVISOR = "SUPERVISOR"
-    VENDOR = "VENDOR"
-    BUILDER = "BUILDER"
-    MANAGER = "MANAGER"
-    OWNER = "OWNER"
-    ADMIN = "ADMIN"
-    
-class UserStage(PyEnum):
-    NEW = "new"
-    CURIOUS = "curious"
-    IDENTIFIED = "identified"
-    ENGAGED = "engaged"
-    TRUSTED = "trusted"
-
-class User(Base):
-    __tablename__ = "users"
-
-    sender_id = Column(String, primary_key=True)
-    user_full_name = Column(String, nullable=False)
-    user_category = Column(Enum(UserCategory), default=UserCategory.USER)  # USER / SUPERVISOR / ADMIN
-    user_stage = Column(Enum(UserStage), default=UserStage.NEW)  # new / onboarding / active / inactive
-    user_identity = Column(String, nullable=True)  # e.g., phone number, email
-    credit_offer_pending = Column(Boolean, default=False)
-    user_actions = Column(ARRAY(String), default=list)  # e.g., ["asked_for_material_quote", "used_credit_feature"]
-    last_action_ts = Column(DateTime, default=datetime.utcnow)
-    user_score = Column(Integer, default=0)
-
-    _table_args_ = (UniqueConstraint('sender_id', name='uq_user_sender_id'),)
-class QuoteRequestVendor(Base):
-        __tablename__ = "quote_request_vendors"
-
-        quote_request_id = Column(UUID(as_uuid=True), ForeignKey("material_requests.id", ondelete="CASCADE"), primary_key=True)
-        vendor_id = Column(UUID(as_uuid=True), ForeignKey("vendors.vendor_id", ondelete="CASCADE"), primary_key=True)
-
-class QuoteResponse(Base):
-        __tablename__ = "quote_responses"
+def get_review_order_url(url: str, headers: dict = None, params: dict = None) -> str:
+    try:
+        print("get_review_order_url:::: Verifying URL")
+        response = requests.get(url, headers=headers, params=params)
+        response.raise_for_status()
         
-        id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-        quote_request_id = Column(UUID(as_uuid=True), ForeignKey("material_requests.id", ondelete="CASCADE"))
-        vendor_id = Column(UUID(as_uuid=True), ForeignKey("vendors.vendor_id", ondelete="CASCADE"), nullable=False)
-        material_name = Column(String, nullable=False)
-        specification = Column(String, nullable=True)
-        unit = Column(String, nullable=False)
-        price = Column(Float, nullable=False)
-        available_quantity = Column(Float, nullable=True)
-        notes = Column(Text, nullable=True)
-        created_at = Column(DateTime, default=datetime.utcnow)
-        vendor = relationship("Vendor")
-
-class QuoteStatus(PyEnum):
-    PENDING = "pending"
-    QUOTED = "quoted"
-    APPROVED = "approved"
-    REJECTED = "rejected"
-class VendorQuoteItem(Base):
-    __tablename__ = "vendor_quote_items"
-
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-
-    # Anchors
-    quote_request_id = Column(UUID(as_uuid=True), ForeignKey("material_requests.id", ondelete="CASCADE"), nullable=False)
-    request_item_id  = Column(UUID(as_uuid=True), ForeignKey("material_request_items.id", ondelete="CASCADE"), nullable=False)
-    vendor_id        = Column(UUID(as_uuid=True), ForeignKey("vendors.vendor_id", ondelete="CASCADE"), nullable=False)
-
-    # Vendor’s response
-    quoted_price  = Column(Float, nullable=False)     # numeric value
-    price_unit    = Column(String, nullable=False)    # e.g., "bag", "kg", "ton", "piece"
-    delivery_days = Column(Integer, nullable=True)    # e.g., 7 days
-    delivery_date = Column(Date, nullable=True)      # alternative exact date
-    comments      = Column(Text, nullable=True)       # vendor's comments or notes
-    status        = Column(Enum(QuoteStatus), default=RequestStatus.QUOTED, nullable=False)  # quoted / approved
-
-    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
-
-    __table_args__ = (
-        UniqueConstraint("quote_request_id", "vendor_id", "request_item_id", name="uq_vendor_quote_unique_line"),
-    )
-
-    # Relationships
-    request      = relationship("MaterialRequest", back_populates="vendor_quote_items")
-    request_item = relationship("MaterialRequestItem", backref="vendor_quotes")
-    vendor       = relationship("Vendor", back_populates="vendor_quote_items")
+        if params:
+            url = f"{url}?{urlencode(params)}"
+        print("get_review_order_url :::: response :", str(response))
+        print("get_review_order_url :::: response params code :", params)
+        return url
+    except Exception as e:
+        print("get_review_order_json :::: Error fetching data:", str(e))
+        return "Error fetching data: " + str(e)
 
 
-# -------------------------------------------------------------------------
-# sku_master  (canonical product list)
-# -------------------------------------------------------------------------
+# ------------------------------ Confirm Order ------------------------------
 
-class SkuMaster(Base):
-    __tablename__ = "sku_master"
-
-    # Opaque ID (ULID/UUID acceptable). Using TEXT as per doc.
-    sku_id       = Column(String, primary_key=True)
-    brand        = Column(String, nullable=False)
-    category     = Column(String, nullable=False)    # e.g., tmt, cement, paint, tiles, wire
-
-    # Base UOM for normalized pricing (e.g., kg, L, m)
-    uom_code     = Column(String, nullable=False)
-
-    # Pack info (kept simple)
-    pack_qty     = Column(Numeric, nullable=False, default=1)
-    pack_uom     = Column(String, nullable=False, default="kg")
-
-    description  = Column(Text, nullable=True)
-
-    # Category-specific attributes (JSONB); index added below
-    attributes   = Column(JSONB, nullable=False)
-
-    # Identity string generated in app layer (e.g., lower(brand)|grade|size…)
-    canonical_key = Column(String, nullable=True)
-
-    # active | retired
-    status       = Column(String, nullable=False, default="active")
-    created_at   = Column(DateTime, default=datetime.utcnow, nullable=False)
-    updated_at   = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
-
-    __table_args__ = (
-        Index("idx_sku_cankey", "canonical_key"),
-        Index("idx_sku_attrs", "attributes", postgresql_using="gin"),
-        CheckConstraint("status IN ('active','retired')", name="ck_sku_status"),
-    )
+class ConfirmOrderRequest(BaseModel):
+    request_id: UUID
+    vendor_id: UUID
+    notes: Optional[str] = None
+    expected_delivery_date: Optional[datetime] = None
 
 
-# -------------------------------------------------------------------------
-# sku_vendor_price  (every vendor price row; append-only)
-# -------------------------------------------------------------------------
+@router.post("/confirm-order")
+async def confirm_order(payload: ConfirmOrderRequest):
+    """
+    Approve a single vendor for the given request, mark other vendor quotes as not selected,
+    lock the request and items, compute total, and notify the vendor via WhatsApp (CTA + buttons).
+    """
+    try:
+        async with AsyncSessionLocal() as session:
+            crud = ProcurementCRUD(session)
 
-class SkuVendorPrice(Base):
-    __tablename__ = "sku_vendor_price"
+            # Approve vendor + compute order summary
+            summary = await crud.approve_vendor_for_request(
+                request_id=payload.request_id,
+                vendor_id=payload.vendor_id,
+                expected_delivery_date=payload.expected_delivery_date,
+                notes=payload.notes,
+            )
 
-    # BIGSERIAL equivalent
-    id         = Column(BigInteger, primary_key=True, autoincrement=True)
+            # Notify vendor via WhatsApp
+            try:
+                vendor_record = await crud.get_vendor_by_id(payload.vendor_id)
+                vendor_phone = getattr(vendor_record, "phone_number", None) if vendor_record else None
+                print(f"apis ::::: confirm_order ::::: resolved vendor phone : {vendor_phone}")
+                await send_vendor_order_confirmation(
+                    request_id=str(payload.request_id),
+                    vendor_id=str(payload.vendor_id),
+                    order_summary=summary,
+                    phone=vendor_phone,
+                )
+            except Exception as me:
+                # Non-fatal
+                print(f"apis ::::: confirm_order ::::: vendor notify failed : {me}")
 
-    # FK to sku_master.sku_id (TEXT)
-    sku_id     = Column(String, ForeignKey("sku_master.sku_id", ondelete="CASCADE"), nullable=False)
+            return {
+                "success": True,
+                "message": "Order confirmed with selected vendor.",
+                "order_total": summary.get("order_total"),
+                "vendor_name": summary.get("vendor_name"),
+                "line_items": summary.get("items", []),
+            }
 
-    # Use your existing vendors.vendor_id (UUID)
-    vendor_id  = Column(UUID(as_uuid=True), ForeignKey("vendors.vendor_id", ondelete="CASCADE"), nullable=False)
-    quoted_at  = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    
 
-    # Price normalized to sku_master.uom_code
-    price      = Column(Numeric, nullable=False)
-    currency   = Column(String, nullable=False, default="INR")
-
-    resolved   = Column(Boolean, nullable=False, default=False)   # true if unique match
-    quote_ref  = Column(String, nullable=True)                    # shared across ambiguous candidates
-    tag        = Column(Text, nullable=True)                      # free note, e.g., "TEMP — Vizag Fe550D 12mm (length ?)"
-
-    pincode    = Column(String, nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
-
-    __table_args__ = (
-        # Prevent dupes for the same ambiguous line
-        UniqueConstraint("vendor_id", "quote_ref", "sku_id", name="uq_vendor_quote_sku"),
-        Index("idx_svp_vendor_sku", "vendor_id", "sku_id"),
-        Index("idx_svp_resolved", "resolved"),
-        Index("idx_svp_sku_resolved", "sku_id", "resolved"),
-        Index("idx_svp_quoted_at", "quoted_at"),
-    )
