@@ -10,6 +10,7 @@ import logging
 router = APIRouter()
 from app.logging_config import logger
 import requests
+from pathlib import Path
 
 # Load environment variables
 load_dotenv()
@@ -48,10 +49,14 @@ WHATSAPP_API_URL = "https://graph.facebook.com/v19.0/768446403009450/messages"
 
 ACCESS_TOKEN = os.getenv("WHATSAPP_ACCESS_TOKEN")
 
+MEDIA_DOWNLOAD_PATH = os.getenv("MEDIA_DOWNLOAD_DIR")
+if not MEDIA_DOWNLOAD_PATH:
+    raise RuntimeError("Environment variable `MEDIA_DOWNLOAD_DIR` must be set.")
+MEDIA_DOWNLOAD_DIR = Path(MEDIA_DOWNLOAD_PATH)
+
 # implementing a presistnace layer to preseve the chat history tha saves the state of messages for followup questions required by UOC manager 
 #r = redis.Redis(host='localhost', port=6379, decode_responses=True)
 memory_store = {}
- 
 
 def get_state(sender_id: str): 
     print("Webhook :::::: get_state::::: Getting state for sender_id:", sender_id)
@@ -128,16 +133,36 @@ def download_whatsapp_image(media_id: str) -> str:
         return None
 
     media_url = res.json().get("url")
-    
-    #Downloading media content
-    image_data = requests.get(media_url, headers=headers).content
-    filename = f"C:/Users/koppi/OneDrive/Desktop/Bab.ai/{media_id}.jpg"
-    
-    with open(filename, "wb") as f:
-        f.write(image_data)
-    
+    if not media_url:
+        print("Webhook :::::: download_whatsapp_image::::: Media URL missing in response")
+        return None
+
+    try:
+        MEDIA_DOWNLOAD_DIR.mkdir(parents=True, exist_ok=True)
+    except Exception as err:
+        print("Webhook :::::: download_whatsapp_image::::: Failed to ensure download dir:", err)
+        return None
+
+    try:
+        media_res = requests.get(media_url, headers=headers, stream=True, timeout=30)
+        media_res.raise_for_status()
+    except Exception as err:
+        print("Webhook :::::: download_whatsapp_image::::: Failed to download media:", err)
+        return None
+
+    filename = MEDIA_DOWNLOAD_DIR / f"{media_id}.jpg"
+
+    try:
+        with open(filename, "wb") as file_obj:
+            for chunk in media_res.iter_content(chunk_size=8192):
+                if chunk:
+                    file_obj.write(chunk)
+    except Exception as err:
+        print("Webhook :::::: download_whatsapp_image::::: Failed to save image:", err)
+        return None
+
     print(f" Webhook :::::: download_whatsapp_image::::: Saved image to {filename}")
-    return filename
+    return str(filename)
       
 async def run_agent_by_name(agent_name: str, state: dict) -> dict:
     """
@@ -221,7 +246,7 @@ async def handle_whatsapp_event(data: dict):
         msg_type = msg["type"]
         contacts = entry.get("contacts", [])
         user_name = None
-        
+
         if contacts and isinstance(contacts[0], dict):
             profile = contacts[0].get("profile", {})
             if isinstance(profile, dict):
@@ -308,7 +333,7 @@ async def handle_whatsapp_event(data: dict):
 
             # Download the file
             ext = ".pdf" if file_type == "pdf" else ".bin"
-            local_path = f"C:/Users/koppi/OneDrive/Desktop/Bab.ai/{media_id}{ext}"
+            local_path = MEDIA_DOWNLOAD_DIR / f"{media_id}{ext}"
             try:
                 file_data = requests.get(media_url, timeout=10).content
                 with open(local_path, "wb") as fp:
@@ -322,7 +347,7 @@ async def handle_whatsapp_event(data: dict):
             if file_type == "pdf":
                 try:
                     import fitz  # PyMuPDF
-                    doc = fitz.open(local_path)
+                    doc = fitz.open(str(local_path))
                     pdf_text = "".join(page.get_text() for page in doc)
                     doc.close()
                     state["pdf_text"] = pdf_text
@@ -338,7 +363,7 @@ async def handle_whatsapp_event(data: dict):
             state["media_id"] = media_id
             state["file_name"] = file_name
             state["msg_type"] = file_type
-            state["media_url"] = local_path
+            state["media_url"] = str(local_path)
         else:
             return {"status": "ignored", "reason": f"Unsupported message type {msg_type}"}
 
@@ -526,16 +551,14 @@ async def handle_whatsapp_event(data: dict):
             elif q_type == "procurement":
                 print("Webhook :::::: whatsapp_webhook::::: q_type = procurement :::: The set question type is procurement, so calling ??collect_procurement_details_interactively?? --", state["uoc_question_type"])
                 followups_state = await collect_procurement_details_interactively(state)
-                save_state(sender_id, followups_state)
-                response_msg = followups_state.get("latest_respons", "No response available.")
-                message_type = followups_state.get("uoc_next_message_type", "plain")
-                extra_data = followups_state.get("uoc_next_message_extra_data", None)
-                #whatsapp_output(sender_id, response_msg, message_type=message_type, extra_data=extra_data)
                 return {"status": "done", "reply": response_msg}
                
             elif q_type== "procurement_new_user_flow":
                 print("Webhook :::::: whatsapp_webhook::::: q_type = procurement_new_user_flow :::: The set question type is procurement_new_user_flow, so calling ??procurement_agent.run_procurement_agent?? --", state["uoc_question_type"])
-                followups_state = await procurement_agent.run_procurement_agent(state, config={"configurable": {"crud": crud}})
+                try:
+                    followups_state = await procurement_agent.run_procurement_agent(state, config={"configurable": {"crud": crud}})
+                except Exception as e:
+                    print("Webhook ::::: whatsapp_webhook ::::: q_type = procurement_new_user_flow ::::: Exception rasied : ", e)
 
             elif q_type == "credit_start": 
                 print("Webhook :::::: whatsapp_webhook::::: <needs_clarification True>::::: <uoc_question_type>::::: -- The set question type is credit_onboard_start, so calling ??credit_agent.run_credit_agent?? --", state["uoc_question_type"])

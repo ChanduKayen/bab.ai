@@ -501,3 +501,4 @@ class SkuCRUD:
             print(f"sku_crud ::::: insert_sku_vendor_quotes ::::: ERROR for sku_id={item.sku_id} : {e}")
             raise
         print(f"sku_crud ::::: insert_sku_vendor_quotes ::::: OK for item_id={item.requested_item_id}")
+
