@@ -1,13 +1,21 @@
 
 import asyncio
 from decimal import Decimal
-from database.models import MaterialRequest, MaterialRequestItem, QuoteRequestVendor, QuoteResponse, SkuMaster, SkuVendorPrice
+from database.models import (
+    MaterialRequest,
+    MaterialRequestItem,
+    Project,
+    QuoteRequestVendor,
+    QuoteResponse,
+    SkuMaster,
+    SkuVendorPrice,
+)
 from database.models import VendorQuoteItem as VendorQuoteItemDB, RequestStatus, Vendor
 from database.models import MaterialRequest, MaterialRequestItem
 from database.models import QuoteStatus
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
-from sqlalchemy import literal_column, or_, update, delete
+from sqlalchemy import func, literal_column, or_, update, delete
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import joinedload
 from datetime import datetime
@@ -208,7 +216,7 @@ class ProcurementCRUD:
                 else:
                     row_id = uuid4()  # generate for truly new rows
 
-                #print(f"procurement_crud ::::: payload status {src.get('status')}")
+                print(f"procurement_crud ::::: payload status {src.get('status')}")
                 status_val = src.get("status")
                 if default_status is not None:
                     status_val = default_status
@@ -337,6 +345,36 @@ class ProcurementCRUD:
             print("procurement_crud ::::: get_vendor_by_id ::::: exception :", e)
             raise
 
+    async def get_request_summary(self, request_id: _UUID) -> Dict[str, Any]:
+        try:
+            req_uuid = _UUID(str(request_id))
+            stmt = (
+                select(
+                    MaterialRequest.sender_id,
+                    MaterialRequest.delivery_location,
+                    MaterialRequest.expected_delivery_date,
+                    Project.name,
+                    Project.location,
+                )
+                .outerjoin(Project, Project.id == MaterialRequest.project_id)
+                .where(MaterialRequest.id == req_uuid)
+            )
+            row = (await self.session.execute(stmt)).first()
+            if not row:
+                return {}
+
+            sender_id, delivery_location, expected_date, project_name, project_location = row
+            return {
+                "sender_id": sender_id,
+                "delivery_location": delivery_location,
+                "expected_delivery_date": expected_date.isoformat() if expected_date else None,
+                "project_name": project_name,
+                "project_location": project_location,
+            }
+        except Exception as e:
+            print("procurement_crud ::::: get_request_summary ::::: exception :", e)
+            return {}
+
     async def get_request_item_specs(self, request_id) -> Dict[str, dict]:
         try:
             result = await self.session.execute(
@@ -364,20 +402,39 @@ class ProcurementCRUD:
         comments: Optional[str] = None  
 
     async def insert_vendor_quotes(
-    self,
-    request_id: _UUID,
-    vendor_id: _UUID,
-    items: List[VendorQuoteItemPayload],
-    ):
+        self,
+        request_id: _UUID,
+        vendor_id: _UUID,
+        items: List[VendorQuoteItemPayload],
+    ) -> bool:
         """
         Upsert each vendor quote line by (quote_request_id, vendor_id, request_item_id).
         Sets created_at on insert and updated_at on both insert/update.
         """
-        print(f"procurement_crud ::::: insert_vendor_quotes ::::: started for request_id : {request_id}, vendor_id : {vendor_id}")
+        print(
+            "procurement_crud ::::: insert_vendor_quotes ::::: started for request_id :",
+            request_id,
+            ", vendor_id :",
+            vendor_id,
+        )
 
         now = datetime.utcnow()
         skuCRUD = SkuCRUD(self.session)
         sku_tasks: List[asyncio.Task] = []
+
+        req_uuid = _UUID(str(request_id))
+        ven_uuid = _UUID(str(vendor_id))
+
+        existing_stmt = (
+            select(func.count())
+            .select_from(VendorQuoteItemDB)
+            .where(
+                VendorQuoteItemDB.quote_request_id == req_uuid,
+                VendorQuoteItemDB.vendor_id == ven_uuid,
+            )
+        )
+        existing_count = (await self.session.execute(existing_stmt)).scalar() or 0
+        had_existing = existing_count > 0
 
         for item in items:
             try:
@@ -386,8 +443,8 @@ class ProcurementCRUD:
                 stmt = (
                     pg_insert(VendorQuoteItemDB)
                     .values(
-                        quote_request_id=request_id,
-                        vendor_id=vendor_id,
+                        quote_request_id=req_uuid,
+                        vendor_id=ven_uuid,
                         request_item_id=item.requested_item_id,
                         quoted_price=item.quoted_price,
                         price_unit=price_unit,
@@ -412,7 +469,11 @@ class ProcurementCRUD:
                 await self.session.execute(stmt)
                 print(f"procurement_crud ::::: insert_vendor_quotes ::::: upsert OK for item_name={item.requested_item_id}")
 
-                sku_tasks.append(asyncio.create_task(skuCRUD.process_vendor_quote_item(request_id, vendor_id, item)))
+                sku_tasks.append(
+                    asyncio.create_task(
+                        skuCRUD.process_vendor_quote_item(str(req_uuid), str(ven_uuid), item)
+                    )
+                )
 
             except Exception as e:
                 await self.session.rollback()
@@ -426,6 +487,7 @@ class ProcurementCRUD:
                     print(f"procurement_crud ::::: insert_vendor_quotes ::::: matching task raised exception : {result}")
 
         await self.session.commit()
+        return had_existing
     
     async def fetch_vendor_quotes_for_request(self, request_id: _UUID):
         """
@@ -602,6 +664,7 @@ class ProcurementCRUD:
                     "line_total": line_total,
                 })
 
+            summary_info = await self.get_request_summary(req_uuid)
             await self.session.commit()
 
             return {
@@ -609,6 +672,10 @@ class ProcurementCRUD:
                 "vendor_name": vendor_name,
                 "order_total": round(order_total, 2),
                 "items": items,
+                "project_name": summary_info.get("project_name") if summary_info else None,
+                "project_location": summary_info.get("project_location") if summary_info else None,
+                "delivery_location": summary_info.get("delivery_location") if summary_info else None,
+                "expected_delivery_date": summary_info.get("expected_delivery_date") if summary_info else expected_delivery_date,
             }
 
         except Exception as e:
@@ -657,3 +724,4 @@ class ProcurementCRUD:
             print("procurement_crud ::::: vendor_decline_and_reopen ::::: exception :", e)
             raise
  
+

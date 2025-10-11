@@ -2,12 +2,18 @@
 from PIL import Image, ImageDraw, ImageFont
 from typing import List, Dict, Tuple, Optional
 import os, time, re, unicodedata, glob, sys
-from PIL import Image
+from dotenv import load_dotenv
+
+load_dotenv()
+
+DEFAULT_UPLOAD_DIR = os.getenv("DEFAULT_UPLOAD_DIR")
+if not DEFAULT_UPLOAD_DIR:
+    raise RuntimeError("Environment variable `default_upload_dir` must be set.")
 
 
 # ---------- Public API ----------
 def generate_review_order_card(
-    out_dir: str = r"C:/Users/koppi/OneDrive/Desktop/Bab.asi/upload_images",
+    out_dir: str = DEFAULT_UPLOAD_DIR,
     size: Tuple[int, int] = (1200, 628),
     variant: str = "og_header",  # "og_header" | "waba_header2x" | "square"
     # Font controls
@@ -206,7 +212,6 @@ def generate_review_order_card(
     d.text(((W - fw)//2, H - pad - fh), footer_hint, font=Small, fill=muted)
 
     # Save
-    os.makedirs(out_dir, exist_ok=True)
     out_path = os.path.join(out_dir, _make_filename(heading, ext=".png", suffix=variant))
     im.save(out_path, format="PNG", optimize=True)
     return os.path.abspath(out_path)

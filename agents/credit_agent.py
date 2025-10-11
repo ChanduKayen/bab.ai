@@ -161,7 +161,7 @@ async def run_credit_agent(state: dict,  config: dict):
         active_material_request_id = state["active_material_request_id"] if "active_material_request_id" in state else None
         
         #review_order_url = apis.get_review_order_url("https://bab-ai.com/review-order", {}, {"uuid": state["active_material_request_id"]})
-        review_order_url = apis.get_review_order_url("https://www.bab-ai.com/onboarding")
+        review_order_url = apis.get_review_order_url(os.getenv("ONBOARDING_URL"))
         print("Credit Agent:::: run_credit_agent :review_order_url", review_order_url)
         state["latest_respons"] = msg
         state.update(
@@ -366,7 +366,7 @@ async def handle_poll_approval(state, crud):
                 )
                 active_material_request_id = state["active_material_request_id"] if "active_material_request_id" in state else None
                 #review_order_url = apis.get_review_order_url("https://bab-ai.com/review-order", {}, {"uuid": state["active_material_request_id"]})
-                review_order_url = apis.get_review_order_url("https://www.bab-ai.com/onboarding")
+                review_order_url = apis.get_review_order_url(os.getenv("ONBOARDING_URL"))
 
                 state.update(
                         uoc_next_message_type="link_cta",
