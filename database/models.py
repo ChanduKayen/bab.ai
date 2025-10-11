@@ -558,4 +558,3 @@ class SkuAlias(Base):
         Index("idx_sku_alias_text", "alias_text"),
     )
 
-

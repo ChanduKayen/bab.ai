@@ -1,11 +1,8 @@
 
 
-import os, json, base64, openai, random
-from typing import Dict, Tuple, Optional, Union
-from datetime import datetime
+import os, json, base64, openai
+from typing import Dict, Tuple, Optional
 from dotenv import load_dotenv
-import asyncio
-
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import SystemMessage, HumanMessage
 import re        
@@ -516,7 +513,6 @@ async def new_user_flow(state: AgentState,latest_msg_intent:str, crud: DatabaseC
                 {"id": "procurement", "title": "⚡ Get Quotes"}, 
                 {"id": "credit", "title": "💳 Credit Options"},
             ]
-  
             return state
         else:
             print("SiteOps Agent:::: run_siteops_agent : Last message/ Image is found")
@@ -569,7 +565,7 @@ async def new_user_flow(state: AgentState,latest_msg_intent:str, crud: DatabaseC
         else:
             print("SiteOps Agent:::: new_user_flow:::: Button is note selected")
             if latest_msg_intent == "random":
-                from agents.random_agent import classify_and_respond
+                from agents.random_agent_backup import classify_and_respond
                 return await classify_and_respond(state, config={"configurable": {"crud": crud}})
             elif latest_msg_intent == "siteops":
                 latest_response = "📷 Ready to check your site? Let's continue!"

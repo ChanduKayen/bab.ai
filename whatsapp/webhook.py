@@ -20,7 +20,7 @@ import asyncio
 import random
 import json
 import agents.siteops_agent as siteops_agent
-from agents.random_agent import classify_and_respond
+from agents.random_agent_backup import classify_and_respond
 from agents.procurement_agent import collect_procurement_details_interactively
 from agents import credit_agent
 from whatsapp.builder_out import whatsapp_output

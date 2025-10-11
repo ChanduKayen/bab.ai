@@ -2,7 +2,6 @@
 
 import os
 from typing import Dict, List, Optional
-
 from dotenv import load_dotenv
 
 from whatsapp.builder_out import whatsapp_output
@@ -362,3 +361,262 @@ async def notify_user_vendor_quote_update(
             message_text="\n".join(message_lines),
             message_type="plain",
         )
+
+
+async def send_vendor_order_confirmation(
+    request_id: str,
+    vendor_id: str,
+    order_summary: dict,
+    phone: Optional[str] = None,
+) -> None:
+    """Notify the selected vendor that an order has been confirmed."""
+    if not phone:
+        print("quotation_handler ::::: send_vendor_order_confirmation ::::: no phone number available")
+        return
+
+    print("quotation_handler ::::: send_vendor_order_confirmation ::::: using phone :", phone)
+    total_val = order_summary.get("order_total")
+    project_line = _format_project_line(
+        order_summary.get("project_name"),
+        order_summary.get("project_location") or order_summary.get("delivery_location"),
+    )
+    expected_date = order_summary.get("expected_delivery_date")
+    items = order_summary.get("items", [])
+
+    item_lines: List[str] = []
+    for item in items[:5]:
+        name = item.get("material_name") or "Material"
+        qty = item.get("quantity")
+        unit = item.get("quantity_units") or "units"
+        item_lines.append(f"• {name} – {qty} {unit}")
+    if len(items) > 5:
+        item_lines.append("• …")
+
+    message_lines = [
+        "✅ Bab.ai order confirmed",
+        f"Project: {project_line}",
+    ]
+    if expected_date:
+        message_lines.append(f"Deliver by: {expected_date}")
+    if total_val is not None:
+        message_lines.append(f"Order total: ₹{total_val}")
+    if item_lines:
+        message_lines.append("Items:")
+        message_lines.extend(item_lines)
+    message_lines.append("Open the link below for full details and next steps.")
+
+    whatsapp_output(
+        to_number=phone,
+        message_text="\n".join(message_lines),
+        message_type="link_cta",
+        extra_data={"display_text": "View Order Details", "url": _vendor_order_url(request_id, vendor_id)},
+    )
+
+    buttons = [
+        {"id": "vendor_confirm", "title": "Confirm Order"},
+        {"id": "vendor_cannot_fulfill", "title": "Cannot Fulfill"},
+    ]
+    whatsapp_output(
+        to_number=phone,
+        message_text="Please choose an option:",
+        message_type="button",
+        extra_data=buttons,
+    )
+
+    from whatsapp.webhook import save_state  # noqa: WPS433  (lazy import to avoid cycle)
+
+    vendor_state = {
+        "sender_id": phone,
+        "messages": [],
+        "agent_first_run": False,
+        "needs_clarification": True,
+        "uoc_last_called_by": None,
+        "uoc_confidence": "low",
+        "uoc": {},
+        "uoc_question_type": "procurement_new_user_flow",
+        "uoc_next_message_type": "button",
+        "uoc_next_message_extra_data": buttons,
+        "vendor_ack_context": {
+            "request_id": request_id,
+            "vendor_id": vendor_id,
+            "order_total": total_val,
+        },
+    }
+    save_state(phone, vendor_state)
+
+
+async def notify_user_vendor_confirmed(user_id: str, request_id: str) -> None:
+    try:
+        whatsapp_output(
+            to_number=user_id,
+            message_text="Vendor confirmed your order. Preparing for delivery.",
+            message_type="plain",
+        )
+    except Exception as exc:  # pragma: no cover
+        print("quotation_handler ::::: notify_user_vendor_confirmed ::::: exception :", exc)
+
+
+async def notify_user_vendor_declined(user_id: str, request_id: str) -> None:
+    try:
+        url = _quote_summary_url(request_id)
+        if url:
+            whatsapp_output(
+                to_number=user_id,
+                message_text="Selected vendor can’t fulfill. Please choose another vendor.",
+                message_type="link_cta",
+                extra_data={"display_text": "View Other Quotes", "url": url},
+            )
+        else:
+            whatsapp_output(
+                to_number=user_id,
+                message_text="Selected vendor can’t fulfill. Please choose another vendor.",
+                message_type="plain",
+            )
+    except Exception as exc:  # pragma: no cover
+        print("quotation_handler ::::: notify_user_vendor_declined ::::: exception :", exc)
+
+
+async def notify_user_vendor_quote_update(
+    user_id: str,
+    vendor_name: Optional[str],
+    request_id: str,
+    *,
+    project_name: Optional[str] = None,
+    project_location: Optional[str] = None,
+    is_update: bool = False,
+) -> None:
+    """Ping the supervisor when a vendor submits or updates prices."""
+    if not user_id:
+        print("quotation_handler ::::: notify_user_vendor_quote_update ::::: missing user id")
+        return
+
+    project_line = _format_project_line(project_name, project_location)
+    vendor_label = vendor_name or "A vendor"
+    verb = "updated" if is_update else "submitted"
+    icon = "🔁" if is_update else "📩"
+
+    message_lines = [
+        f"{icon} {vendor_label} has {verb} prices for {project_line}.",
+        "Review all quotes below to compare vendors.",
+    ]
+
+    url = _quote_summary_url(request_id)
+    if url:
+        whatsapp_output(
+            to_number=user_id,
+            message_text="\n".join(message_lines),
+            message_type="link_cta",
+            extra_data={"display_text": "Review Quotes", "url": url},
+        )
+    else:
+        whatsapp_output(
+            to_number=user_id,
+            message_text="\n".join(message_lines),
+            message_type="plain",
+        )
+
+
+async def send_vendor_order_confirmation(request_id: str, vendor_id: str, order_summary: dict, phone: Optional[str] = None):
+    """
+    Notify selected vendor with order confirmation CTA + decision buttons.
+    Requires a target phone number from the vendor record.
+    """
+    try:
+        if not phone:
+            print("quotation_handler ::::: send_vendor_order_confirmation ::::: no phone number available")
+            return
+
+        print(f"quotation_handler ::::: send_vendor_order_confirmation ::::: using phone : {phone}")
+        total_val = order_summary.get("order_total")
+        vendor_name = order_summary.get("vendor_name", "Vendor")
+
+        # Build link
+        if VENDOR_ORDER_CONFIRMATION_URL_BASE:
+            url = f"{VENDOR_ORDER_CONFIRMATION_URL_BASE}?uuid={request_id}&vendor_id={vendor_id}"
+        else:
+            url = f"https://example.com/vendor/order?uuid={request_id}&vendor_id={vendor_id}"
+
+        # Message body
+        message = (
+            f"You have been selected for order {request_id}.\n"
+            f"Total: ₹{total_val}\n"
+            f"Please review and confirm."
+        )
+
+        # 1) Send CTA link to view order details
+        whatsapp_output(
+            to_number=phone,
+            message_text=message,
+            message_type="link_cta",
+            extra_data={"display_text": "View Order Details", "url": url},
+        )
+
+        # 2) Send decision buttons (simple IDs; context seeded in state)
+        buttons = [
+            {"id": "vendor_confirm", "title": "Confirm Order"},
+            {"id": "vendor_cannot_fulfill", "title": "Cannot Fulfill"},
+        ]
+        whatsapp_output(
+            to_number=phone,
+            message_text="Please choose an option:",
+            message_type="button",
+            extra_data=buttons,
+        )
+
+        # 3) Seed vendor chat state so webhook routes reply to procurement agent without changes
+        # Lazy import to avoid circular import during app startup
+        from whatsapp.webhook import save_state  # noqa: WPS433
+
+        vendor_state = {
+            "sender_id": phone,
+            "messages": [],
+            "agent_first_run": False,
+            "needs_clarification": True,
+            "uoc_last_called_by": None,
+            "uoc_confidence": "low",
+            "uoc": {},
+            # Route into procurement agent flow
+            "uoc_question_type": "procurement_new_user_flow",
+            # In case we want to resend buttons on follow-ups
+            "uoc_next_message_type": "button",
+            "uoc_next_message_extra_data": buttons,
+            # Context for vendor acknowledgement handlers
+            "vendor_ack_context": {
+                "request_id": request_id,
+                "vendor_id": vendor_id,
+                "order_total": total_val,
+            },
+        }
+        save_state(phone, vendor_state)
+    except Exception as e:
+        print("quotation_handler ::::: send_vendor_order_confirmation ::::: exception :", e)
+        raise
+
+async def notify_user_vendor_confirmed(user_id: str, request_id: str):
+    try:
+        whatsapp_output(
+            to_number=user_id,
+            message_text="Vendor confirmed your order. Preparing for delivery.",
+            message_type="plain",
+        )
+    except Exception as e:
+        print("quotation_handler ::::: notify_user_vendor_confirmed ::::: exception :", e)
+
+async def notify_user_vendor_declined(user_id: str, request_id: str):
+    try:
+        url = f"{QUOTE_SUMMARY_URL}?uuid={request_id}" if QUOTE_SUMMARY_URL else None
+        if url:
+            whatsapp_output(
+                to_number=user_id,
+                message_text="Selected vendor can’t fulfill. Please choose another vendor.",
+                message_type="link_cta",
+                extra_data={"display_text": "View Other Quotes", "url": url},
+            )
+        else:
+            whatsapp_output(
+                to_number=user_id,
+                message_text="Selected vendor can’t fulfill. Please choose another vendor.",
+                message_type="plain",
+            )
+    except Exception as e:
+        print("quotation_handler ::::: notify_user_vendor_declined ::::: exception :", e)

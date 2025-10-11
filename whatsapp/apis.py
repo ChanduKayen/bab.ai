@@ -2,10 +2,11 @@
 
 from urllib.parse import urlencode
 import requests
-from fastapi import APIRouter, HTTPException, Depends, Query
-from pydantic import BaseModel, Field
+from fastapi import APIRouter, HTTPException, Query
+from pydantic import BaseModel, Field, ValidationError
 from uuid import UUID
 from datetime import datetime
+from typing import Any, Dict, Optional, List
 from typing import Any, Dict, Optional, List
 #from database._init_ import AsyncSessionLocal
 from app.db import get_sessionmaker
@@ -31,6 +32,17 @@ class MaterialItem(BaseModel):
     unit_price: Optional[float] = None
     status: Optional[str] = None
     vendor_notes: Optional[str] = None
+
+class Project(BaseModel):
+    id: str
+    name: Optional[str] = None
+    location: Optional[str] = None
+
+class Vendor(BaseModel):
+    vendor_id: UUID
+    name: Optional[str] = None
+    phone: Optional[str] = None
+    email: Optional[str] = None
 
 class Project(BaseModel):
     id: str

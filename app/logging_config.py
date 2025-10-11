@@ -21,5 +21,4 @@ file_handler.setFormatter(formatter)
 if not logger.handlers:
     logger.addHandler(file_handler)
 
-
 logger.propagate = False  # prevent Uvicorn from hijacking
