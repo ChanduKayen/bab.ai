@@ -375,7 +375,7 @@ Rules:
                 items = [parsed]
 
         elif isinstance(parsed, list):
-            items = parsed
+            items = parsed 
 
         else:
             items = []
