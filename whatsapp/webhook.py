@@ -44,7 +44,8 @@ from app.db import get_db
 from database.whatsapp_crud import first_time_event
 
 #This has to be updated accroding to he phone number you are using for the whatsapp business account.
-WHATSAPP_API_URL = "https://graph.facebook.com/v19.0/768446403009450/messages"
+PHONE_NUMBER_ID = os.getenv("PHONE_NUMBER_ID")
+WHATSAPP_API_URL = f"https://graph.facebook.com/v19.0/{PHONE_NUMBER_ID}/messages"
 #ACCESS_TOKEN = "EAAIMZBw8BqsgBO4ZAdqhSNYjSuupWb2dw5btXJ6zyLUGwOUE5s5okrJnL4o4m89b14KQyZCjZBZAN3yZBCRanqLC82m59bGe4Rd2BPfRe3A3pvGFZCTf2xB7a6insIzesPDVMLIw4gwlMkkz7NGl3ZBLvP5MU8i3mZBMmUBShGeQkSlAyRhsXJtlsg8uGaAfYwTid8PZAGBKnbOR3LFpCgBD8ZCIMJh9xI0sHWy"  
 
 ACCESS_TOKEN = os.getenv("WHATSAPP_ACCESS_TOKEN")
@@ -183,7 +184,7 @@ async def run_agent_by_name(agent_name: str, state: dict) -> dict:
     else:
         raise ValueError(f"Unknown agent name: {agent_name}")
      
-@router.get("/webhook/")
+x@router.get("/webhook/")
 @router.get("/webhook")
 async def verify(request: Request):
     q = request.query_params

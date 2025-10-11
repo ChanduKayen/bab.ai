@@ -33,6 +33,7 @@ from pathlib import Path
 # -----------------------------------------------------------------------------
 load_dotenv()  # lodad environment variables from .env file
 #llm = ChatOpenAI(model="gpt-4", temperature=0)
+PHONE_NUMBER_ID = os.getenv("PHONE_NUMBER_ID")
 ACCESS_TOKEN = os.getenv("WHATSAPP_ACCESS_TOKEN")
 upload_dir_value = os.getenv("DEFAULT_UPLOAD_DIR")
 if not upload_dir_value:
@@ -191,7 +192,7 @@ def _last_two_user_msgs(state: dict) -> tuple[str, str]:
 # External (WABA) Utility
 # -----------------------------------------------------------------------------
 def upload_media_from_path( file_path: str, mime_type: str = "image/jpeg") -> str:
-    url = f"https://graph.facebook.com/v19.0/768446403009450/media"
+    url = f"https://graph.facebook.com/v19.0/{PHONE_NUMBER_ID}/media"
     headers = {"Authorization": f"Bearer {ACCESS_TOKEN}"}
     files = {"file": (os.path.basename(file_path), open(file_path, "rb"), mime_type)}
     data = {"messaging_product": "whatsapp"}
