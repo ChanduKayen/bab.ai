@@ -420,7 +420,7 @@ class ProcurementCRUD:
 
         now = datetime.utcnow()
         skuCRUD = SkuCRUD(self.session)
-        sku_tasks: List[asyncio.Task] = []
+        sku_queue: List[VendorQuoteItemPayload] = []
 
         req_uuid = _UUID(str(request_id))
         ven_uuid = _UUID(str(vendor_id))
@@ -469,22 +469,23 @@ class ProcurementCRUD:
                 await self.session.execute(stmt)
                 print(f"procurement_crud ::::: insert_vendor_quotes ::::: upsert OK for item_name={item.requested_item_id}")
 
-                sku_tasks.append(
-                    asyncio.create_task(
-                        skuCRUD.process_vendor_quote_item(str(req_uuid), str(ven_uuid), item)
-                    )
-                )
+                sku_queue.append(item)
 
             except Exception as e:
                 await self.session.rollback()
                 print(f"procurement_crud ::::: insert_vendor_quotes ::::: exception for item_id={item.requested_item_id} : {e}")
                 raise
 
-        if sku_tasks:
-            results = await asyncio.gather(*sku_tasks, return_exceptions=True)
-            for result in results:
-                if isinstance(result, Exception):
-                    print(f"procurement_crud ::::: insert_vendor_quotes ::::: matching task raised exception : {result}")
+        for pending_item in sku_queue:
+            try:
+                await skuCRUD.process_vendor_quote_item(str(req_uuid), str(ven_uuid), pending_item)
+            except Exception as err:
+                await self.session.rollback()
+                print(
+                    "procurement_crud ::::: insert_vendor_quotes ::::: sku processing failed for item_id="
+                    f"{getattr(pending_item, 'requested_item_id', None)} : {err}"
+                )
+                raise
 
         await self.session.commit()
         return had_existing
