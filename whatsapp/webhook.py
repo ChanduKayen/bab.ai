@@ -184,7 +184,7 @@ async def run_agent_by_name(agent_name: str, state: dict) -> dict:
     else:
         raise ValueError(f"Unknown agent name: {agent_name}")
      
-x@router.get("/webhook/")
+@router.get("/webhook/")
 @router.get("/webhook")
 async def verify(request: Request):
     q = request.query_params
