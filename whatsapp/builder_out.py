@@ -72,11 +72,9 @@ USAGE PATTERNS (state → whatsapp_output):
 """
 
 load_dotenv(override=True)
-WHATSAPP_API_URL = "https://graph.facebook.com/v19.0/768446403009450/messages"
-#ACCESS_TOKEN = "EAAIMZBw8BqsgBO4ZAdqhSNYjSuupWb2dw5btXJ6zyLUGwOUE5s5okrJnL4o4m89b14KQyZCjZBZAN3yZBCRanqLC82m59bGe4Rd2BPfRe3A3pvGFZCTf2xB7a6insIzesPDVMLIw4gwlMkkz7NGl3ZBLvP5MU8i3mZBMmUBShGeQkSlAyRhsXJtlsg8uGaAfYwTid8PZAGBKnbOR3LFpCgBD8ZCIMJh9xI0sHWy"  
+WHATSAPP_API_URL = "https://graph.facebook.com/v19.0/712076848650669/messages"
+#ACCESS_TOKEN = "EAAIMZBw8BqsgBO4ZAdqhSNYjSuupWb2dw5btXJ6zyLUGwOUE5s5okrJnL4o4m89b14KQyZCjZBZAN3yZBCRanqLC82m59bGe4Rd2BPfRe3A3pvGFZCTf2xB7a6insIzesPDVMLIw4gwlMkkz7NGl3ZBLvP5MU8i3mZBMmUBShGeQkSlAyRhsXJtlsg8uGaAfYwTid8PZAGBKnbOR3LFpCgBD8ZCIMJh9xI0sHWy"
 
-# Replace with your phone number ID path (keep version aligned with your app)
-WHATSAPP_API_URL = "https://graph.facebook.com/v19.0/768446403009450/messages"
 ACCESS_TOKEN = os.getenv("WHATSAPP_ACCESS_TOKEN")
 WABA_HEADER_TEXT_LIMIT = 60
 

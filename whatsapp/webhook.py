@@ -20,7 +20,7 @@ import asyncio
 import random
 import json
 import agents.siteops_agent as siteops_agent
-from agents.random_agent_backup import classify_and_respond
+from agents.random_agent import classify_and_respond
 from agents.procurement_agent import collect_procurement_details_interactively
 from agents import credit_agent
 from whatsapp.builder_out import whatsapp_output
@@ -44,7 +44,7 @@ from app.db import get_db
 from database.whatsapp_crud import first_time_event
 
 #This has to be updated accroding to he phone number you are using for the whatsapp business account.
-WHATSAPP_API_URL = "https://graph.facebook.com/v19.0/768446403009450/messages"
+WHATSAPP_API_URL = "https://graph.facebook.com/v19.0/712076848650669/messages"
 #ACCESS_TOKEN = "EAAIMZBw8BqsgBO4ZAdqhSNYjSuupWb2dw5btXJ6zyLUGwOUE5s5okrJnL4o4m89b14KQyZCjZBZAN3yZBCRanqLC82m59bGe4Rd2BPfRe3A3pvGFZCTf2xB7a6insIzesPDVMLIw4gwlMkkz7NGl3ZBLvP5MU8i3mZBMmUBShGeQkSlAyRhsXJtlsg8uGaAfYwTid8PZAGBKnbOR3LFpCgBD8ZCIMJh9xI0sHWy"  
 
 ACCESS_TOKEN = os.getenv("WHATSAPP_ACCESS_TOKEN")

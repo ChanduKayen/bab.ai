@@ -47,18 +47,63 @@ _JSON_ANY = re.compile(r"\{.*?\}", re.S)
 
 def strict_json(text: str) -> Dict[str, Any]:
     raw = (text or "").strip()
-    # strip code fences
+    # Strip code fences like ```json ... ```
     if raw.startswith("```"):
         raw = raw.strip("`")
-        idx = raw.find("\n")
-        raw = raw[idx+1:] if idx != -1 else raw
-    matches = list(_JSON_ANY.finditer(raw))
-    for m in reversed(matches):
-        try:
-            return json.loads(m.group(0))
-        except Exception:
+        nl = raw.find("\n")
+        raw = raw[nl + 1:] if nl != -1 else raw
+
+    # Find first balanced {...}
+    start = raw.find("{")
+    if start == -1:
+        return {}
+
+    depth = 0
+    in_str = False
+    escape = False
+    end = -1
+
+    for i in range(start, len(raw)):
+        ch = raw[i]
+
+        if in_str:
+            if escape:
+                escape = False
+            elif ch == "\\":
+                escape = True
+            elif ch == '"':
+                in_str = False
             continue
-    return {}
+
+        if ch == '"':
+            in_str = True
+        elif ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                end = i + 1
+                candidate = raw[start:end]
+                try:
+                    return json.loads(candidate)
+                except Exception:
+                    # If this slice isn't valid JSON, keep scanning in case there's another object later
+                    # Reset to search after this '{'
+                    next_start = raw.find("{", start + 1)
+                    if next_start == -1:
+                        break
+                    i = next_start - 1
+                    start = next_start
+                    depth = 0
+                    in_str = False
+                    escape = False
+
+    # Last-chance: try the whole string
+    try:
+        return json.loads(raw)
+    except Exception:
+        return {}
+
 
 # ------------------------------------------------------------------
 # LLM routing prompt (global standard)
@@ -112,12 +157,19 @@ TRUSTED_USER_PROMPT   = "Write a short 2-line message for a trusted user that of
 
 # ---------------------------- Conversational prompts --------------------------
 CONVERSATION_SYSTEM_PROMPT = (
-    "You are Bab.ai’s WhatsApp assistant for construction pros. "
-    "Respond naturally based on conversation so far, in the user's language. "
-    "Constraints: 1–2 short sentences, ≤120 characters, max one emoji, warm and helpful. "
-    "If useful, hint one relevant feature (site ops, procurement, or credit). "
-    "Never ask for sensitive PII unless clearly in a credit/KYC flow."
+    "You are Bab.ai — a smart, friendly WhatsApp assistant built for builders and construction professionals. "
+    "Read the conversation trail carefully and reply in the same language and tone as the user. "
+    "Be natural, concise (1–2 short sentences, ≤120 characters, max one emoji), and sound like a trusted teammate on site. "
+    "Your primary role is to help builders share their material requirements — by explaining them what you can do and what they can do"
+    "and then collect the best quotations from trusted OEMs, distributors, and manufacturers. "
+    "Whenever relevant, smoothly guide the conversation toward useful actions like sharing a requirement, "
+    "checking prices, or exploring pay-later credit for materials. " 
+    "Explain Bab.ai’s abilities in a helpful, human tone — never like a sales pitch. "
+    "Keep every response warm, context-aware, and conversational. "
+    "If the topic is off-track, gently bring the user back by reminding how Bab.ai can assist with procurement or credit. "
+    "Never ask for sensitive personal data unless the user is clearly in a verified credit/KYC flow."
 )
+
 
 CONVERSATION_JSON_PROMPT = (
     "Return ONLY a JSON object with this schema and nothing else:\n"
@@ -135,9 +187,9 @@ CONVERSATION_JSON_PROMPT = (
 # Default CTAs
 # ------------------------------------------------------------------
 DEFAULT_CTA = {
-    "siteops":     {"id": "siteops",     "title": "🏗 Manage My Site"},
-    "procurement": {"id": "procurement", "title": "⚡ Quick Quotes"},
-    "credit":      {"id": "credit",      "title": "💳 Pay-Later Credit"},
+    #"siteops":     {"id": "siteops",     "title": "🏗 Manage My Site"},
+    "procurement": {"id": "procurement", "title": "📷 Share Requirement"},
+    #"credit":      {"id": "credit",      "title": "💳 Pay-Later Credit"},
 }
 
 # ------------------------------------------------------------------
@@ -195,7 +247,7 @@ async def handle_procurement(state: AgentState, latest_response: str, config: di
         uoc_next_message_type="button",
         uoc_question_type="procurement",
         needs_clarification=True,
-        uoc_next_message_extra_data=[uoc_next_message_extra_data] if uoc_next_message_extra_data else [{"id":"procurement","title":"📦 Start Order"}],
+        uoc_next_message_extra_data=[uoc_next_message_extra_data] if uoc_next_message_extra_data else [{"id":"procurement","title":"📷 Share Requirement"}],
         agent_first_run=True
     )
     return await run_procurement_agent(state, config)
@@ -264,8 +316,6 @@ def _one_emoji(msg: str) -> str:
 def _cap_len(msg: str, limit: int = 120) -> str:
     return msg if len(msg) <= limit else msg[:limit-1] + "…"
 
-def _clean_message(msg: str) -> str:
-    return _cap_len(_one_emoji(msg.strip()))
  
 def _last_user_text(state: AgentState) -> str: 
     if not state.get("messages"):
@@ -296,20 +346,24 @@ def _history_snippet(state: AgentState, limit: int = 4) -> str:
 async def generate_conversational_reply_with_cta(state: AgentState) -> Dict[str, Any]:
     last = _last_user_text(state)
     history = _history_snippet(state)
+    print("Random agent::: Generate_conversational_reply_with_cta history snippet:::: ", history)
     prompt = (
         f"Recent conversation (most recent last):\n{history}\n\n"
         f"User's latest message:\n\"\"\"{last}\"\"\"\n\n"
         "Follow the schema strictly."
     )
-    res = await _ainvoke_json(llm, [
+    res = await llm.ainvoke([
         SystemMessage(content=CONVERSATION_SYSTEM_PROMPT + "\n\n" + CONVERSATION_JSON_PROMPT),
         HumanMessage(content=prompt)
+
     ])
+    print("LLM Response :", res)
     data = strict_json(res.content) or {}
     message = (data.get("message") or "").strip()
+    print("Random agent::: Generate_conversational_reply_with_cta LLM  message:::: ", repr(message))
     cta = data.get("cta") or {}
     cta_id = str(cta.get("id") or "").strip().lower()
-    if cta_id not in {"siteops","procurement","credit"}:
+    if cta_id not in {"siteops","procurement","credit"}: 
         low = (last or "").lower()
         if any(k in low for k in ["photo","progress","site","work","crew","stock","update"]):
             cta_id = "siteops"
@@ -341,13 +395,6 @@ def _quick_cta_from_text(last: str, state: AgentState) -> Dict[str, str]:
         return DEFAULT_CTA["credit"]
     return DEFAULT_CTA["procurement"]
 
-def _is_quick_ack_or_greet(text: str) -> bool:
-    t = (text or "").strip().lower()
-    if not t:
-        return False
-    acks = {"ok","okay","k","kk","thanks","thank you","thx","👍","👌","✅","done","cool","great","nice","super"}
-    greets = {"hi","hello","hey","yo","sup","good morning","good evening","good night"}
-    return t in acks or t in greets or (len(t) <= 4 and t in {"ok","k","kk"})
 
 # ------------------------------------------------------------------
 # Main entry
@@ -357,8 +404,10 @@ async def classify_and_respond(state: AgentState, config: Optional[Dict[str, Any
     last_msg = _last_user_text(state)
     last_lower = last_msg.lower()
     log.debug("random_router:last_message: %s", last_lower)
-    intent = state.get("intent") or "random"
-    print("Random Agent::: Classify and respond ::: Called ")
+    intent = state.get("intent") 
+    if not intent:
+        intent = "random"
+    print("Random Agent::: Classify and respond ::: Called --------- ", intent)
     if last_lower in _HANDLER_MAP:
         return await _HANDLER_MAP[last_lower](state, latest_response=state.get("latest_respons", ""), config=config)
 
@@ -366,71 +415,75 @@ async def classify_and_respond(state: AgentState, config: Optional[Dict[str, Any
     image_present = bool(state.get("image_path"))
     if (not last_msg and not re.search(r"\w", last_msg or "")) and not image_present:
         state.update(
-            latest_respons="🙂 Need site updates, quotations or credit? Try Bab.ai!",
+            latest_respons="🙂 Need material quotes or site help? Just share a photo — Bab.ai will collect quotations directly from manufacturers.",
             uoc_next_message_type="button",
             uoc_next_message_extra_data=[{"id": "siteops", "title": "🏗 Manage My Site"}],
         )
         return state
     if intent == "random":
-        if state.get("agent_first_run", True):
+        if state.get("agent_first_run")== True:
+            print("Random Agent::: Classify and respond ::: First Run ", intent)
             username = state.get("user_full_name", "there")
-            greeting_message = await generate_new_user_greeting(username)
+            greeting_message = f"Hello {username}! 👋 Just share a photo of what you need — Bab.ai will get quotations directly from manufacturers for you." # --- NO need of LLM Call here
             state.update(
-                latest_respons=_clean_message(greeting_message),
+                latest_respons= greeting_message,
                 uoc_next_message_type="button",
                 uoc_question_type="onboarding",
                 needs_clarification=True,
                 agent_first_run=False,
                 user_verified=True,
                 uoc_next_message_extra_data=[
-                    {"id": "siteops", "title": "🏗 Manage My Site"},
+                    #{"id": "siteops", "title": "🏗 Manage My Site"},
                     {"id": "procurement", "title": "⚡ Quick Quotes"},
-                    {"id": "credit", "title": "💳 Pay-Later Credit"},
+                   # {"id": "credit", "title": "💳 Pay-Later Credit"},
                 ],
             )
             return state
         else:
-            # Efficiency: quick heuristic for short acks/greetings (no LLM call)
-            if _is_quick_ack_or_greet(last_msg):
-                cta = _quick_cta_from_text(last_msg, state)
-                name = _first_name(state.get("user_full_name", ""))
-                reply = f"Got it, {name}! Need anything else?"
+        # Agent second run and beyond — build a contextual reply from trail + latest
+            print("Random Agent::: Classify and respond ::: Second Run ")
+
+            try:
+                convo = await generate_conversational_reply_with_cta(state) or {}
+                msg = convo.get("message", "").strip()
+                cta = convo.get("cta") or {}
+                cta_id = (cta.get("id") or "").strip().lower()
+                cta_title = (cta.get("title") or "").strip()
+
+                # Fallbacks if LLM didn't return a valid CTA
+                if cta_id not in {"siteops", "procurement", "credit"}:
+                    cta_choice = _quick_cta_from_text(_last_user_text(state), state)
+                    cta_id = cta_choice["id"]
+                    cta_title = cta_title or cta_choice["title"]
+
+                # Safety caps: one emoji + ≤120 chars, title ≤20 chars
+                #msg = _clean_message(msg) or "Got it. What would you like to do next?"
+                cta_title = _cap_len(cta_title or DEFAULT_CTA[cta_id]["title"], 20)
+
+                # Update state for WhatsApp UI (button with one clear action)
                 state.update(
-                    latest_respons=_clean_message(reply),
+                    latest_respons=msg,
                     uoc_next_message_type="button",
-                    uoc_question_type=state.get("uoc_question_type") or "onboarding",
-                    needs_clarification=False,
-                    uoc_next_message_extra_data=[cta],
+                    uoc_question_type="onboarding",              
+                    needs_clarification=True,
+                    uoc_next_message_extra_data=[{"id": cta_id, "title": cta_title}],
                 )
                 return state
 
-            # Efficiency: cache identical last message to avoid repeat LLM calls
-            if state.get("last_random_llm_input") == last_lower and state.get("last_random_llm_output"):
-                out = state["last_random_llm_output"]
+            except Exception as e:
+                log.error("random_router: second-run convo build failed: %s", e)
+                # Heuristic-only fallback (no LLM)
+                last = _last_user_text(state)
+                cta_choice = _quick_cta_from_text(last, state)
                 state.update(
-                    latest_respons=_clean_message(out.get("message") or ""),
+                    latest_respons="Noted. Try this next?",
                     uoc_next_message_type="button",
-                    uoc_question_type=state.get("uoc_question_type") or "onboarding",
-                    needs_clarification=False,
-                    uoc_next_message_extra_data=[out.get("cta") or DEFAULT_CTA["procurement"]],
+                    uoc_question_type=cta_choice["id"],
+                    needs_clarification=True,
+                    uoc_next_message_extra_data=[cta_choice],
                 )
                 return state
 
-            # Conversational LLM with CTA suggestion
-            out = await generate_conversational_reply_with_cta(state)
-            state.update(
-                latest_respons=_clean_message(out.get("message") or ""),
-                uoc_next_message_type="button",
-                uoc_question_type=state.get("uoc_question_type") or "onboarding",
-                needs_clarification=False,
-                uoc_next_message_extra_data=[out.get("cta") or DEFAULT_CTA["procurement"]],
-            )
-            # update cache
-            state["last_random_llm_input"] = last_lower
-            state["last_random_llm_output"] = out
-            return state
-
-    # Non-random intents → classify/respond via router
     try:
         state = await route_and_respond(state)
     except Exception as e:
