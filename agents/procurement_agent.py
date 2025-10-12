@@ -205,20 +205,17 @@ def upload_media_from_path( file_path: str, mime_type: str = "image/jpeg") -> st
 # Context Helpers
 # -----------------------------------------------------------------------------
 CHIT_CHAT_PROMPT = """
-You are Bab.ai — a witty, warm WhatsApp assistant for builders.
-When the user chit-chats, respond in ONE short, magical-sounding line
-that feels gentle, sometimes lightly funny, and shows you’re capable
-of handling both casual talk and serious material orders. 
-Seamlessly guide the reply back toward the user’s last context 
-(e.g., materials, quantities, delivery, or procurement flow).
-
-Constraints:
-- ≤120 characters
-- At most one emoji
-- No markdown, no bullet points
-- No PII requests
-- Must feel like a natural continuation, not a reset
-Return ONLY the sentence.
+"You are Bab.ai — a smart, friendly WhatsApp assistant built for builders and construction professionals. "
+    "Read the conversation trail carefully and reply in the same language and tone as the user. "
+    "Be natural, concise (1–2 short sentences, ≤120 characters, max one emoji), and sound like a trusted teammate on site. "
+    "Your primary role is to help builders share their material requirements — by explaining them what you can do and what they can do"
+    "and then collect the best quotations from trusted OEMs, distributors, and manufacturers. "
+    "Whenever relevant, smoothly guide the conversation toward useful actions like sharing a requirement, "
+    "checking prices, or exploring pay-later credit for materials. " 
+    "Explain Bab.ai’s abilities in a helpful, human tone — never like a sales pitch. "
+    "Keep every response warm, context-aware, and conversational. "
+    "If the topic is off-track, gently bring the user back by reminding how Bab.ai can assist with procurement or credit. "
+    "Never ask for sensitive personal data unless the user is clearly in a verified credit/KYC flow."
 """
 
 async def handle_chit_chat(state: dict, llm: ChatOpenAI | None = None) -> dict:
@@ -257,7 +254,7 @@ async def handle_chit_chat(state: dict, llm: ChatOpenAI | None = None) -> dict:
     state["needs_clarification"] = True
     state["last_known_intent"] = "procurement"  # keep lane sticky
     state["uoc_next_message_extra_data"] = [
-        {"id": "rfq", "title": "📎 Upload BOQ/Photo"},
+        {"id": "rfq", "title": "📷 Share Requirement"},
         {"id": "credit_use", "title": "⚡ Buy with Credit"},
     ]
    
@@ -270,8 +267,8 @@ async def handle_help(state: AgentState) -> AgentState:
 
     try:
         # Path to your ready MP4 file
-        media_path = r"C:\Users\vlaks\OneDrive\Desktop\Bab.ai\Marketing\Quotations_tutorial.mp4"
-        
+        media_path = r"C:\Users\koppi\OneDrive\Desktop\Bab.ai\Marketing\Quotations_tutorial.mp4"
+
         # Upload to WABA
         media_id = upload_media_from_path(media_path, mime_type="video/mp4")
 
@@ -288,8 +285,8 @@ async def handle_help(state: AgentState) -> AgentState:
             needs_clarification=True,
             uoc_next_message_extra_data={
                 "buttons": [
-                    {"id": "procurement", "title": "🧱 Request Material"},
-                    {"id": "credit_use", "title": "💳 Use Credit"},
+                    {"id": "procurement", "title": "📷 Share Requirement"},
+                   # {"id": "credit_use", "title": "💳 Use Credit"},
                     {"id": "main_menu", "title": "🏠 Main Menu"}
                 ],
                 "media_id": media_id,
@@ -386,7 +383,7 @@ Rules:
                 items = [parsed]
 
         elif isinstance(parsed, list):
-            items = parsed
+            items = parsed 
 
         else:
             items = []
@@ -633,8 +630,13 @@ async def new_user_flow(state: AgentState, crud: ProcurementCRUD  ) -> AgentStat
             print("Procurement Agent:::: new_user_flow : last_msg is empty and no image, setting up welcome message")
             greeting_message = (
                 f"👋 Hi {user_name}! I'm your procurement assistant.\n"
-                "I can help you get quotes and manage your construction material orders.\n\n"
-                "What would you like to do?"
+"I’ll help you connect directly with manufacturers.\n\n"
+"Here’s how it works:\n"
+"1️⃣ Share a photo or BOQ of your material requirement.\n"
+"2️⃣ Bab.ai collects quotations directly from OEMs & distributors.\n"
+"3️⃣ You compare and choose the best offer.\n"
+"4️⃣ (Optional) Use Pay-Later Credit for easy purchase 💳\n\n"
+"What would you like to do now?"
             )
            
             state["latest_respons"] = greeting_message
@@ -645,7 +647,7 @@ async def new_user_flow(state: AgentState, crud: ProcurementCRUD  ) -> AgentStat
             state["agent_first_run"] = False
             state["user_verified"] = True
             state["uoc_next_message_extra_data"] = [
-                {"id": "procurement_start", "title": "🧱 Request Material"},
+                {"id": "procurement_start", "title": "📷 Share Requirement"},
                 {"id": "main_menu", "title": "🏠 Main Menu"},
             ]
             return state
@@ -743,12 +745,13 @@ _Next, choose an action:_
                                           {"id": "procurement", "title": "⚡ Get Quick Quotes"},
                                           {"id": "credit",      "title": "💳 Get Credit Now"}] 
                 return await _HANDLER_MAP[last_msg](state, crud, uoc_next_message_extra_data)
-            else: 
+        else: 
                 print("Procurement Agent:::: new_user_flow : last_msg is not main_menu, handling it as a specific intent")
                 state["last_known_intent"] = "procurement"
                 state = await route_and_respond(state)
                 return state
-            
+        
+        ###########################################    
         latest_msg_intent= state["intent"]
         latest_msg_context = state["intent_context"]
 

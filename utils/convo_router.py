@@ -224,8 +224,8 @@ Allowed contexts:
 Rules:
 - Choose exactly ONE intent and ONE context from the allowed lists.
 - Use intent="ambiguous" ONLY if the message provides no clear cues.
-- If intent="ambiguous", set context="help" if the users's message is unclear but is logically/ intentionally related to PRocurement or credit or Siteops
-- If intent="ambiguous", set context="chit-chat" if the users's message is unrelated to Procurement or credit or Siteops.
+- If intent="ambiguous", set context="help" if the users's message is unclear but is related to Procurement or credit or Siteops
+- If intent="ambiguous", set context="chit-chat" if the users's message is unrelated and feels like a casual conversation, joking or light-hearted banter or anything else.
 - Prefer the most actionable context.
 - Infer obvious slots from the message; leave absent ones as null.
 - If uncertain, use intent="random", context="help".
@@ -366,7 +366,7 @@ async def route_and_respond(state: Dict[str, Any]) -> Dict[str, Any]:
     # If image/doc present, pre-seed slots
     image_seed = {}
     if user_msg_type == "image" or state.get("image_path"):
-        image_seed = {"doc_present": True, "doc_type": "photo"}
+         image_seed = {"doc_present": True, "doc_type": "photo"}
     print("Convo Router :::::: Route and Respond:::: Formatting Prompt")
     prompt = _format_prompt(user_msg_text)
     resp = await _llm.ainvoke([
@@ -395,10 +395,12 @@ async def route_and_respond(state: Dict[str, Any]) -> Dict[str, Any]:
     if intent == "ambiguous":
          
          chosen_intent = state.get("last_known_intent") or FALLBACK["intent"]
-         context = "help" 
+         #context = "help" 
 
     state["intent_context"] = context
     print("Convo Router :::::: Route and Respond:::: Found chosen_intent and  context - ", chosen_intent, context)
+    
+    #if state["last_known_intent"] not in {"procurement","credit","siteops"} and chosen_intent =="random":
 
  
     if chosen_intent =="procurement" and context in {"start_order","order_followup","upload","upload_doc","help", "chit-chat"}:
@@ -424,14 +426,14 @@ async def route_and_respond(state: Dict[str, Any]) -> Dict[str, Any]:
         except Exception as e:
             print("Convo Router :::::: Error in random classify_and_respond:", e)
    
-
+ 
    # Remaining contexts might need additional infomration from user beofre passing tot he agent or its just faster to directly resopnd to them withoug having to touch the agent.
     required = REQUIRED_SLOTS.get((intent, context), [])
     await _apply_state(state, intent, context, merged_slots, required)
     # Persist slots back to state
     state["extracted_slots"] = merged_slots
     return state
-
+ 
 async def _apply_state(state: Dict[str, Any], intent: str, context: str, slots: Dict[str, Any], required: List[str]) -> None:
     tpl = TEMPLATES.get((intent, context), TEMPLATES[("random","help")])
 
