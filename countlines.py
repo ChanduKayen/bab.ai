@@ -18,6 +18,6 @@ def count_lines_of_code(directory, extension=".py"):
     return total_lines
 
 if __name__ == "__main__":
-    directory_path = r"C:\Users\koppi\OneDrive\Desktop\Bab.ai\bab.ai-1"
+    directory_path = r"C:\Users\koppi\OneDrive\Desktop\Thirtee \Thirtee -1"
     total_lines = count_lines_of_code(directory_path)
     print(f"Total lines of code written by you in '{directory_path}': {total_lines}")

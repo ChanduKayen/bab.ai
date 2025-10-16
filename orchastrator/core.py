@@ -8,7 +8,7 @@ from langchain_core.messages import SystemMessage, HumanMessage
 import os
 from dotenv import load_dotenv
 from models.chatstate import AgentState
-import base64  
+import base64
 import openai  # Import the OpenAI module
 import json  # Import the JSON module
 import re  # Import the re module for regular expressions
@@ -136,7 +136,7 @@ def build_insight_prompt(image_path, message_text=""):
     "    \"next_likely_step\": \"...\",\n"
     "    \"construction_method\": \"...\",\n"
     "    \"execution_quality\": [...],\n"
-    "    \"tools_equipment_seen\": [...],\n"
+    "    \"tools_equipment_seen\": [...],\n" 
     "    \"labor_seen\": [...],\n"
     "    \"weather_context\": [...],\n"
     "    \"hidden_dependencies\": [...],\n"

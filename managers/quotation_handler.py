@@ -55,7 +55,7 @@ async def send_quote_request_to_vendor(
 
     project_line = _format_project_line(project_name, project_location)
     message_lines = [
-        "👷 Bab.ai procurement request",
+        "👷 Thirtee  procurement request",
         f"Project: {project_line}",
     ]
     if item_count is not None:
@@ -240,7 +240,7 @@ async def send_vendor_order_confirmation(
         item_lines.append("• …")
 
     message_lines = [
-        "✅ Bab.ai order confirmed",
+        "✅ Thirtee  order confirmed",
         f"Project: {project_line}",
     ]
     if expected_date:
@@ -393,7 +393,7 @@ async def send_vendor_order_confirmation(
         item_lines.append("• …")
 
     message_lines = [
-        "✅ Bab.ai order confirmed",
+        "✅ Thirtee  order confirmed",
         f"Project: {project_line}",
     ]
     if expected_date:

@@ -1,6 +1,6 @@
 # agents/random_router_agent.py
 # ------------------------------------------------------------------
-# WhatsApp concierge for Bab.ai.
+# WhatsApp concierge for Thirtee .
 # Now delegates FIRST to Convo Router (fast deterministic),
 # and only falls back to LLM when needed.
 #
@@ -63,7 +63,7 @@ def strict_json(text: str) -> Dict[str, Any]:
 # ------------------------------------------------------------------
 # LLM routing prompt (global standard)
 # ------------------------------------------------------------------
-ROUTER_PROMPT = """You are Bab.ai’s WhatsApp concierge.
+ROUTER_PROMPT = """You are Thirtee ’s WhatsApp concierge.
 
 OUTPUT
 Return ONE single-line JSON object and nothing else:
@@ -81,7 +81,7 @@ GUIDE
 
 RULES
 1. Warm, concise, professional. One emoji max.
-2. If internal_msg_intent = random: respond playfully or empathetically to match the user's tone — then gracefully transition into showcasing one Bab.ai feature in a way that feels natural and almost magical.
+2. If internal_msg_intent = random: respond playfully or empathetically to match the user's tone — then gracefully transition into showcasing one Thirtee  feature in a way that feels natural and almost magical.
    ─ siteops      → cta.id "siteops",     cta.title "🏗 Manage My Site"
    ─ procurement  → cta.id "procurement", cta.title "⚡Quick Quotes"
    ─ credit       → cta.id "credit",      cta.title "💳 Pay-Later Credit"
@@ -92,12 +92,12 @@ RULES
 
 # ---------------------------- User onboarding prompts --------------------------
 NEW_USER_PROMPT = """
-You are Bab.ai — a world-class, emotionally intelligent assistant for construction professionals on WhatsApp.
+You are Thirtee  — a world-class, emotionally intelligent assistant for construction professionals on WhatsApp.
 The user has just joined (or returned). Your job is to make them feel welcomed, seen, and curious.
 
 Write a short 2–3 line message that does the following:
 1) Greet them by name using culturally appropriate tone.
-2) Briefly introduce what Bab.ai can do in a warm, trustworthy way:
+2) Briefly introduce what Thirtee  can do in a warm, trustworthy way:
    • Track site progress from photos 📸
    • Get quotes for cement, steel, etc. from trusted vendors 🧱
    • Unlock pay-later material credit instantly 💳
@@ -268,7 +268,7 @@ async def classify_and_respond(state: AgentState, config: Optional[Dict[str, Any
     image_present = bool(state.get("image_path"))
     if (not last_msg and not re.search(r"\w", last_msg or "")) and not image_present:
         state.update(
-            latest_respons="🙂 Need site updates, quotations or credit? Try Bab.ai!",
+            latest_respons="🙂 Need site updates, quotations or credit? Try Thirtee !",
             uoc_next_message_type="button",
             uoc_next_message_extra_data=[{"id": "siteops", "title": "🏗 Manage My Site"}],
         )

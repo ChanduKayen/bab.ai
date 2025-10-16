@@ -42,6 +42,8 @@ import json
 from hashlib import sha256
 from app.db import get_db
 from database.whatsapp_crud import first_time_event
+from openai import OpenAI
+import os
 
 #This has to be updated accroding to he phone number you are using for the whatsapp business account.
 WHATSAPP_API_URL = "https://graph.facebook.com/v19.0/712076848650669/messages"
@@ -228,6 +230,157 @@ def extract_event_id(payload: dict) -> str:
         return payload["entry"][0]["changes"][0]["value"]["messages"][0]["id"]
     except Exception:
         return sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
+
+import subprocess
+from typing import Optional
+import base64
+
+def download_whatsapp_audio(media_id: str) -> Optional[dict]:
+    """
+    Downloads an audio/voice media file from WhatsApp Graph API.
+    Returns dict with {'original_path', 'normalized_wav_path', 'mime_type', 'duration'} or None on failure.
+    """
+    media_info_url = f"https://graph.facebook.com/v19.0/{media_id}"
+    headers = {"Authorization": f"Bearer {ACCESS_TOKEN}"}
+    print("Webhook :::::: download_whatsapp_audio::::: Getting media info:", media_info_url)
+
+    try:
+        res = requests.get(media_info_url, headers=headers, timeout=10)
+        res.raise_for_status()
+    except Exception as err:
+        print("Webhook :::::: download_whatsapp_audio::::: Failed to get media info:", err)
+        return None
+
+    info = res.json()
+    media_url  = info.get("url")
+    mime_type  = info.get("mime_type", "")
+    if not media_url:
+        print("Webhook :::::: download_whatsapp_audio::::: No media URL in response")
+        return None
+
+    try:
+        MEDIA_DOWNLOAD_DIR.mkdir(parents=True, exist_ok=True)
+    except Exception as err:
+        print("Webhook :::::: download_whatsapp_audio::::: Failed to ensure download dir:", err)
+        return None
+
+    # choose extension
+    ext = ".ogg" if "ogg" in mime_type or "opus" in mime_type else \
+          ".mp3" if "mpeg" in mime_type else \
+          ".wav" if "wav" in mime_type else ".bin"
+    original_path = MEDIA_DOWNLOAD_DIR / f"{media_id}{ext}"
+
+    try:
+        # IMPORTANT: pass auth header for the actual download as well
+        media_res = requests.get(media_url, headers=headers, stream=True, timeout=30)
+        media_res.raise_for_status()
+        with open(original_path, "wb") as f:
+            for chunk in media_res.iter_content(8192):
+                if chunk:
+                    f.write(chunk)
+    except Exception as err:
+        print("Webhook :::::: download_whatsapp_audio::::: Failed to download/save:", err)
+        return None
+
+    print(f"Webhook :::::: download_whatsapp_audio::::: Saved audio to {original_path}")
+
+    # (Optional) normalize to 16 kHz mono WAV for STT engines later
+    normalized_wav_path = None
+    # try:
+    #     # Only transcode if not already a 16kHz wav
+    #     normalized_wav_path = str(MEDIA_DOWNLOAD_DIR / f"{media_id}_16k.wav")
+    #     subprocess.run(
+    #         ["ffmpeg", "-y", "-i", str(original_path), "-ac", "1", "-ar", "16000", normalized_wav_path],
+    #         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True
+    #     )
+    #     print("Webhook :::::: download_whatsapp_audio::::: Normalized WAV created:", normalized_wav_path)
+    # except Exception as err:
+    #     print("Webhook :::::: download_whatsapp_audio::::: ffmpeg not available or failed:", err)
+    #     normalized_wav_path = None
+
+    return {
+        "original_path": str(original_path),
+        "normalized_wav_path": normalized_wav_path,
+        "mime_type": mime_type,
+        # duration is added in the handler from msg payload if present
+    }
+
+client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+
+async def transcribe_with_whisper(state: dict):
+    audio_path = state.get("media_url")
+    print("Webhook :::::: transcribe_with_whisper::::: Transcribing audio at path:", audio_path)
+    if not audio_path:
+        return state
+    with open(audio_path, "rb") as f:
+        tx = client.audio.transcriptions.create(model="whisper-1", file=f)
+    text = (tx.text or "").strip()
+    print("Webhook :::::: transcribe_with_whisper::::: Transcription result:", text)
+    if text:
+        state["audio_transcript"] = text
+        state["messages"].append({"role": "user", "content": text})
+        state["msg_type"] = "text"
+    return state
+
+
+# async def analyze_audio_with_gpt(state: dict, task_prompt: str = "Transcribe this voice note accurately."):
+   
+#     try:
+#         audio_path = state.get("audio_path") or state.get("media_url")
+#         if not audio_path or not os.path.exists(audio_path):
+#             print("GPT-Audio ::::: No valid audio_path found in state.")
+#             return state
+        
+#         # Convert OGG → MP3 if required
+#         audio_path = convert_to_mp3_if_needed(audio_path)
+#         audio_format = "mp3" if audio_path.lower().endswith(".mp3") else "wav"
+
+#         # Initialize OpenAI client
+#         client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+       
+#         # Open audio file
+#         with open(audio_path, "rb") as audio_file:
+#             audio_bytes = audio_file.read()
+#             audio_b64 = base64.b64encode(audio_bytes).decode("utf-8")
+#             print("GPT-Audio ::::: Sending audio to GPT-4o ...")
+#             response = client.chat.completions.create(
+#                 model="gpt-4o-mini",  # or "gpt-4.5" when available
+#                 messages=[
+#                     {
+#                         "role": "user",
+#                         "content": [
+#                             {"type": "input_audio", "input_audio": {"data": audio_b64, "format": "ogg"}},
+#                             {"type": "text", "text": task_prompt},
+#                         ],
+#                     }
+#                 ],
+#             )
+
+#         result_content = response.choices[0].message.content
+
+#         # GPT sometimes returns list of content blocks
+#         if isinstance(result_content, list):
+#             result_text = " ".join(
+#                 part.get("text", "") for part in result_content if part.get("type") == "output_text"
+#             )
+#         elif isinstance(result_content, str):
+#             result_text = result_content
+#         else:
+#             result_text = str(result_content)
+
+#         text = result_text or "An audio message, improperly transcribed."
+#         state["messages"].append({"role": "user", "content": text})
+#         state["msg_type"] = "text"
+#         print("GPT-Audio ::::: Audio processed successfully.", )
+
+#         return state
+
+    # except Exception as e:
+    #     print("GPT-Audio ::::: Error:", e)
+    #     state["audio_transcript"] = None
+    #     state["audio_error"] = str(e)
+    #     return state
+
 async def handle_whatsapp_event(data: dict):
     try:
         logger.info("Entered Webhook route")
@@ -364,6 +517,17 @@ async def handle_whatsapp_event(data: dict):
             state["file_name"] = file_name
             state["msg_type"] = file_type
             state["media_url"] = str(local_path)
+        elif msg_type == "audio":
+            print("Webhook :::::: whatsapp_webhook::::: Processing audio message")
+            audio_obj = msg["audio"]
+            media_id  = audio_obj["id"]
+            # duration  = audio_obj.get("duration")  # seconds (int), if present
+            caption   = ""
+            audio_meta = download_whatsapp_audio(media_id)
+            state["media_url"] = audio_meta["original_path"]
+            
+            state = await transcribe_with_whisper(state)
+
         else:
             return {"status": "ignored", "reason": f"Unsupported message type {msg_type}"}
 
@@ -411,7 +575,7 @@ async def handle_whatsapp_event(data: dict):
 
 "That’s fine. You’ll be done in under a minute — we’ll match future updates to this project for you.",
 
-"Sure, we work with whatever you’ve got. Just a few taps now — Bab.ai will keep everything neatly linked from here on.",
+"Sure, we work with whatever you’ve got. Just a few taps now — Thirtee  will keep everything neatly linked from here on.",
         ]
 
         PROJECT_SELECTION_MESSAGES = [

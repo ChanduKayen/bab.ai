@@ -204,16 +204,16 @@ def upload_media_from_path( file_path: str, mime_type: str = "image/jpeg") -> st
 # Context Helpers
 # -----------------------------------------------------------------------------
 CHIT_CHAT_PROMPT = """
-"You are Bab.ai — a smart, friendly WhatsApp assistant built for builders and construction professionals. "
+"You are Thirtee  — a smart, friendly WhatsApp assistant built for builders and construction professionals. "
     "Read the conversation trail carefully and reply in the same language and tone as the user. "
     "Be natural, concise (1–2 short sentences, ≤120 characters, max one emoji), and sound like a trusted teammate on site. "
     "Your primary role is to help builders share their material requirements — by explaining them what you can do and what they can do"
     "and then collect the best quotations from trusted OEMs, distributors, and manufacturers. "
     "Whenever relevant, smoothly guide the conversation toward useful actions like sharing a requirement, "
     "checking prices, or exploring pay-later credit for materials. " 
-    "Explain Bab.ai’s abilities in a helpful, human tone — never like a sales pitch. "
+    "Explain Thirtee ’s abilities in a helpful, human tone — never like a sales pitch. "
     "Keep every response warm, context-aware, and conversational. "
-    "If the topic is off-track, gently bring the user back by reminding how Bab.ai can assist with procurement or credit. "
+    "If the topic is off-track, gently bring the user back by reminding how Thirtee  can assist with procurement or credit. "
     "Never ask for sensitive personal data unless the user is clearly in a verified credit/KYC flow."
 """
 
@@ -266,7 +266,7 @@ async def handle_help(state: AgentState) -> AgentState:
 
     try:
         # Path to your ready MP4 file
-        media_path = r"C:\Users\koppi\OneDrive\Desktop\Bab.ai\Marketing\Quotations_tutorial.mp4"
+        media_path = r"C:\Users\koppi\OneDrive\Desktop\Thirtee \Marketing\Quotations_tutorial.mp4"
 
         # Upload to WABA
         media_id = upload_media_from_path(media_path, mime_type="video/mp4")
@@ -313,7 +313,7 @@ async def extract_materials(text: str = "", img_b64: str = None) -> list:
     backoff_base = 0.6
 
     sys_prompt = """
-You are Bab.ai, an expert AI for construction procurement.
+You are Thirtee , an expert AI for construction procurement.
 
 Your ONLY job: extract construction material line items into a clean JSON array.
 
@@ -537,7 +537,8 @@ _HANDLER_MAP = {
     "main_menu": handle_main_menu,
     "rfq": handle_rfq,
     "credit_use": handle_credit,
-    "edit_order": handle_order_edit
+    "edit_order": handle_order_edit,
+    #"guided_photo_upload": handle_photo_upload_flow
 }
 
 # -----------------------------------------------------------------------------
@@ -632,7 +633,7 @@ async def new_user_flow(state: AgentState, crud: ProcurementCRUD  ) -> AgentStat
 "I’ll help you connect directly with manufacturers.\n\n"
 "Here’s how it works:\n"
 "1️⃣ Share a photo or BOQ of your material requirement.\n"
-"2️⃣ Bab.ai collects quotations directly from OEMs & distributors.\n"
+"2️⃣ Thirtee  collects quotations directly from OEMs & distributors.\n"
 "3️⃣ You compare and choose the best offer.\n"
 "4️⃣ (Optional) Use Pay-Later Credit for easy purchase 💳\n\n"
 "What would you like to do now?"
@@ -646,7 +647,7 @@ async def new_user_flow(state: AgentState, crud: ProcurementCRUD  ) -> AgentStat
             state["agent_first_run"] = False
             state["user_verified"] = True
             state["uoc_next_message_extra_data"] = [
-                {"id": "procurement_start", "title": "📷 Share Requirement"},
+                {"id": "guided_photo_upload", "title": "📷 Share Requirement"},
                 {"id": "main_menu", "title": "🏠 Main Menu"},
             ]
             return state
@@ -672,7 +673,7 @@ async def new_user_flow(state: AgentState, crud: ProcurementCRUD  ) -> AgentStat
         print("Procurement Agent:::: new_user_flow : extracted materials:", state["procurement_details"]["materials"])
         
         try:
-            async with AsyncSessionLocal() as session:
+            async with AsyncSessionLocal() as session: 
                 procurement_mgr = ProcurementManager(session)
             print("Procurement Agent:::: new_user_flow :::: calling persist_procurement for material : ", state["procurement_details"]["materials"])
             await procurement_mgr.persist_procurement(state)

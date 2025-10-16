@@ -492,7 +492,7 @@ class CreditProfile(Base):
     status = Column(Enum(CreditStatus), default=CreditStatus.PENDING, nullable=False)
     limit = Column(Float, default=0.0)   # Approved credit limit
     used = Column(Float, default=0.0)    # Amount already used
-    trust_score = Column(Float, default=0.0)  # Bab.ai Trust Score
+    trust_score = Column(Float, default=0.0)  # Thirtee  Trust Score
     nbfc_partner = Column(String, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)

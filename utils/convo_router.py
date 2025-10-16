@@ -117,7 +117,7 @@ TEMPLATES = {
         "buttons": [{"id":"credit_limit","title":"📈 Check Limit"}],
     },
     ("credit","vendor_payment"): {
-        "text": "💸 Pay a vendor via Bab.ai Credit. Share *vendor, amount, order ID*.",
+        "text": "💸 Pay a vendor via Thirtee  Credit. Share *vendor, amount, order ID*.",
         "buttons": [{"id":"credit_pay","title":"💳 Pay Vendor"}],
     },
     ("credit","repayment_info"): {
@@ -125,7 +125,7 @@ TEMPLATES = {
         "buttons": [{"id":"credit_repay","title":"📅 Repayment"}],
     },
     ("credit","trust_score"): {
-        "text": "🔎 Your Bab.ai Trust Score speeds up approvals. Want to see it and how to improve?",
+        "text": "🔎 Your Thirtee  Trust Score speeds up approvals. Want to see it and how to improve?",
         "buttons": [{"id":"trust_score","title":"🔎 View Score"}],
     },
 
@@ -453,3 +453,4 @@ async def _apply_state(state: Dict[str, Any], intent: str, context: str, slots: 
     state["uoc_next_message_type"] = "button"
     state["uoc_next_message_extra_data"] = tpl.get("buttons", [])
     state["needs_clarification"] = bool(missing)
+ 
