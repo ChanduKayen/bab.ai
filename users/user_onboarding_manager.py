@@ -1,163 +1,179 @@
-# user_onboarding_manager.py
-from datetime import datetime, timedelta
-from typing import List, Dict, Optional
-import json
-#import redis
-import sqlite3
-ONBOARDING_STAGES = ["new", "curious", "identified", "engaged", "trusted"]
-#r = redis.Redis(host="localhost", port=6379, db=0, decode_responses=True)
+# users/user_handler.py
+from datetime import datetime
+from typing import Optional, Tuple
 
-USER_ACTION_SCORES = {
-    "selected_identity": 2,
-    "shared_project_info": 3,
-    "shared_site_photo": 2,
-    "asked_for_material_quote": 2,
-    "used_credit_feature": 2,
-    "shared_supervisor_contact": 3,
-    "clicked_cta_button": 1,
-    "replied_multiple_times": 1,
-}
-DB_PATH = "babai_users.db"
+from sqlalchemy import select, func
+from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy.ext.asyncio import AsyncSession
 
-# Ensure DB and table exists
-def init_user_db():
-    print("user_orboarding_manager:::::: init_user_db - creating database if not exists") 
-    conn = sqlite3.connect(DB_PATH)
-    cur = conn.cursor()
-    cur.execute('''
-        CREATE TABLE IF NOT EXISTS users (
-            sender_id TEXT PRIMARY KEY,
-            user_full_name TEXT,
-            user_identity TEXT DEFAULT NULL,
-            credit_offer_pending BOOLEAN DEFAULT 1,
-            user_actions TEXT DEFAULT '[]',
-            last_action_ts TEXT,
-            user_score INTEGER DEFAULT 0,
-            user_stage TEXT DEFAULT 'new'
-        )
-    ''')
-    conn.commit()
-    conn.close()
+from database.models import User  # adjust import to your path
+from database.models import UserCategory, UserStage  # adjust import to your path
+from whatsapp.builder_out import whatsapp_output
+from datetime import datetime, timezone
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+from database.models import User
 
-init_user_db()
+async def upsert_user_basic(
+    session: AsyncSession,
+    *,
+    sender_id: str,
+    user_full_name: Optional[str],
+    user_stage: Optional[UserStage] = None,
+    user_identity: Optional[str] = None,
+) -> User:
+    """
+    Idempotent 'get or create' with gentle updates.
+    - Creates user if not present.
+    - If present, refreshes name/stage/identity when provided (non-empty).
+    - Always bumps last_action_ts.
+    Returns ORM User (loaded).
+    """
+    # Prepare incoming values (don’t overwrite with Nones)
+    stage_val = user_stage if user_stage is not None else UserStage.NEW
 
-def user_status(sender_id: str, user_full_name: Optional[str] = None) -> Dict:
-    print(f"user_orboarding_manager:::::: user_status - sender_id: {sender_id}, user_full_name: {user_full_name}")
-    conn = sqlite3.connect(DB_PATH)
-    cur = conn.cursor()
+    insert_values = {
+        "sender_id": sender_id,
+        "user_full_name": user_full_name or "User",
+        "user_category": UserCategory.USER,
+        "user_stage": stage_val,
+        "user_identity": user_identity,
+        "last_action_ts": func.now(),
+    }
 
-    cur.execute("SELECT * FROM users WHERE sender_id = ?", (sender_id,))
-    row = cur.fetchone()
-
-    if row:
-        print(f"user_orboarding_manager:::::: user_status - found existing user record for sender_id: {sender_id}")
-        keys = [d[0] for d in cur.description]
-        user = dict(zip(keys, row))
-        user["user_actions"] = json.loads(user.get("user_actions", "[]"))
-    else:
-        print(f"user_orboarding_manager:::::: user_status - creating new user record for sender_id: {sender_id}")
-        user = {
-            "sender_id": sender_id,
-            "user_full_name": user_full_name,
-            "user_identity": None,
-            "credit_offer_pending": True,
-            "user_actions": [],
-            "last_action_ts": datetime.utcnow().isoformat(),
-        }
-
-        # Compute score and stage for new user
-        score = compute_user_score(user["user_actions"])
-        stage = determine_user_stage(score, False)
-
-        user.update({
-            "user_score": score,
-            "user_stage": stage
-        })
-
-        # Insert into DB
-        cur.execute('''
-            INSERT INTO users (sender_id, user_full_name, user_identity, credit_offer_pending,
-                               user_actions, last_action_ts, user_score, user_stage)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        ''', (
-            user["sender_id"],
-            user["user_full_name"],
-            user["user_identity"],
-            int(user["credit_offer_pending"]),
-            json.dumps(user["user_actions"]),
-            user["last_action_ts"],
-            user["user_score"],
-            user["user_stage"]
-        ))
-        conn.commit()
-
+    # Build an UPSERT that only updates non-null incoming fields.
+    set_updates = {
+        "last_action_ts": func.now(),
+    }
     if user_full_name:
-        user["user_full_name"] = user_full_name
-    print(f"user_orboarding_manager:::::: user_status - returning user record: {user}")
-    conn.close()
+        set_updates["user_full_name"] = user_full_name
+    if user_stage is not None:
+        set_updates["user_stage"] = user_stage
+    if user_identity:
+        set_updates["user_identity"] = user_identity
+
+    stmt = (
+        pg_insert(User)
+        .values(**insert_values)
+        .on_conflict_do_update(
+            index_elements=[User.sender_id],
+            set_=set_updates,
+        )
+        .returning(User.id)  # lightweight returning; we’ll reselect the row
+    )
+
+    await session.execute(stmt)
+    # Load full row to return a live ORM object
+    row = await session.execute(select(User).where(User.sender_id == sender_id))
+    user = row.scalar_one()
     return user
 
-def update_user_record(user: Dict) -> None:
-    print(f"user_orboarding_manager:::::: update_user_record - updating user record for sender_id: {user.get('sender_id')}")
-    conn = sqlite3.connect(DB_PATH)
-    cur = conn.cursor()
-    cur.execute('''
-        INSERT INTO users (sender_id, user_full_name, user_identity, credit_offer_pending,
-                           user_actions, last_action_ts, user_score, user_stage)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT(sender_id) DO UPDATE SET
-            user_full_name=excluded.user_full_name,
-            user_identity=excluded.user_identity,
-            credit_offer_pending=excluded.credit_offer_pending,
-            user_actions=excluded.user_actions,
-            last_action_ts=excluded.last_action_ts,
-            user_score=excluded.user_score,
-            user_stage=excluded.user_stage
-    ''', (
-        user.get("sender_id"),
-        user.get("user_full_name"),
-        user.get("user_identity"),
-        int(user.get("credit_offer_pending", True)),
-        json.dumps(user.get("user_actions", [])),
-        user.get("last_action_ts"),
-        user.get("user_score"),
-        user.get("user_stage"),
-    ))
-    conn.commit()
-    conn.close()
 
-def record_user_action(sender_id: str, action: str):
-    print(f"user_orboarding_manager:::::: record_user_action - sender_id: {sender_id}, action: {action}")
-    user = user_status(sender_id)
-    user["user_actions"].append(action)
-    user["last_action_ts"] = datetime.utcnow().isoformat()
-    user["user_score"] = compute_user_score(user["user_actions"])
-    user["user_stage"] = determine_user_stage(user["user_score"], bool(user.get("user_identity")))
-    update_user_record(user)
-
-def compute_user_score(user_actions: List[str]) -> int:
-    return sum(USER_ACTION_SCORES.get(action, 0) for action in user_actions)
-
-def determine_user_stage(score: int, identity_selected: bool) -> str:
-    if score == 0:
-        return "new"
-    elif not identity_selected:
-        return "curious"
-    elif score < 4:
-        return "identified"
-    elif score < 7:
-        return "engaged"
-    else:
-        return "trusted"
-
-def onboarding_reminder(user_stage: str, last_action_ts: str) -> Optional[str]:
-    if user_stage != "curious":
-        return None
-    try:
-        last_time = datetime.fromisoformat(last_action_ts)
-        if datetime.utcnow() - last_time > timedelta(days=3):
-            return ("👋 Still exploring? Let me help better — are you a builder, site manager, or supplier?")
-    except Exception:
-        pass
+async def ensure_user_and_state_fields(
+    session: AsyncSession,
+    *,
+    sender_id: str,
+    user_full_name: Optional[str],
+    user_stage: Optional[UserStage],
+    user_identity: Optional[str] = None,
+    state: dict = None,
+) : 
+    """
+    Convenience wrapper:
+    - Upserts user
+    - Returns (user, state_patch) where state_patch contains fields you want in `state`
+    """
+    print("User Onboarding Manager :::::: ensure_user_and_state_fields::::: Started", sender_id, user_full_name, user_stage, user_identity)
+    await upsert_user_basic(
+            session,
+            sender_id=sender_id,
+            user_full_name=user_full_name,
+            user_stage=user_stage,
+            user_identity=user_identity,
+        )
+    # state_patch = {
+    #     "user_full_name": user.user_full_name,
+    #     "user_stage": user.user_stage.value if hasattr(user.user_stage, "value") else str(user.user_stage),
+    # } 
+    
+def _role_from_actions(actions) -> Optional[str]:
+    if not actions: return None
+    for a in reversed(actions):
+        if isinstance(a, str) and a.startswith("role:"):
+            r = a.split(":", 1)[1].strip().lower()
+            if r in ("builder", "vendor"): return r
     return None
 
+async def get_user_role(session: AsyncSession, *, sender_id: str) -> Optional[str]:
+    # Fast path: only fetch the needed column
+    role = await session.scalar(
+        select(User.user_category).where(User.sender_id == sender_id)
+    )
+    if role is None:
+        return None
+
+    # Depending on how SA Enum is configured, `role` may be a `UserCategory` or a string.
+    try:
+        # If it's a Python Enum (UserCategory)
+        return role.name  # e.g., UserCategory.BUILDER -> "BUILDER"
+    except AttributeError:
+        # If it's already a DB string value (e.g., "BUILDER" or "BUILDER" as value)
+        return str(role).upper()
+
+async def set_user_role(session: AsyncSession, *, sender_id: str, role: str) -> bool:
+    print("User Onboarding Manager :::::: set_user_role::::: Started", sender_id, role)
+    try:
+        # Fetch user
+        u = await session.scalar(select(User).where(User.sender_id == sender_id))
+        if not u:
+            print(f"⚠️ User not found for sender_id={sender_id}")
+            return False
+
+        # ✅ Convert role string to enum safely
+        try:
+            user_role_enum = UserCategory[role.upper()]  # e.g. "builder" -> UserCategory.BUILDER
+        except KeyError:
+            print(f"❌ Invalid role provided: {role}")
+            return False
+
+        # ✅ Update user_category
+        u.user_category = user_role_enum
+        u.last_action_ts = datetime.utcnow()
+
+        # Optional: keep an audit trail
+        actions = list(u.user_actions or [])
+        actions.append(f"set_category:{role.upper()}")
+        u.user_actions = actions
+
+        await session.flush()
+        await session.commit()
+
+        print(f"✅ User category updated to {user_role_enum} for {sender_id}")
+        return True
+
+    except Exception as e:
+        await session.rollback()
+        print("❌ Failed to update user category:", repr(e))
+        return False
+
+async def record_user_action(
+    session: AsyncSession,
+    *,
+    sender_id: str,
+    action: str,
+) -> None:
+    """
+    Append an action (once per arrival) and bump score if you like.
+    Safe no-op if user not found.
+    """
+    row = await session.execute(select(User).where(User.sender_id == sender_id))
+    user = row.scalar_one_or_none()
+    if not user:
+        return
+
+    actions = list(user.user_actions or [])
+    actions.append(action)
+    user.user_actions = actions
+    user.user_score = (user.user_score or 0) + 1
+    user.last_action_ts = datetime.utcnow()
+    await session.flush()

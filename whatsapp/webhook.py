@@ -24,7 +24,6 @@ from agents.random_agent import classify_and_respond
 from agents.procurement_agent import collect_procurement_details_interactively
 from agents import credit_agent
 from whatsapp.builder_out import whatsapp_output
-from users.user_onboarding_manager import user_status
 #from database._init_ import AsyncSessionLocal
 from app.db import get_sessionmaker
 AsyncSessionLocal = get_sessionmaker()
@@ -44,7 +43,9 @@ from app.db import get_db
 from database.whatsapp_crud import first_time_event
 from openai import OpenAI
 import os
-
+import users.user_onboarding_manager as user_onboarding_manager
+from users.user_onboarding_manager import ensure_user_and_state_fields
+from database.models import UserStage
 #This has to be updated accroding to he phone number you are using for the whatsapp business account.
 WHATSAPP_API_URL = "https://graph.facebook.com/v19.0/712076848650669/messages"
 #ACCESS_TOKEN = "EAAIMZBw8BqsgBO4ZAdqhSNYjSuupWb2dw5btXJ6zyLUGwOUE5s5okrJnL4o4m89b14KQyZCjZBZAN3yZBCRanqLC82m59bGe4Rd2BPfRe3A3pvGFZCTf2xB7a6insIzesPDVMLIw4gwlMkkz7NGl3ZBLvP5MU8i3mZBMmUBShGeQkSlAyRhsXJtlsg8uGaAfYwTid8PZAGBKnbOR3LFpCgBD8ZCIMJh9xI0sHWy"  
@@ -418,15 +419,35 @@ async def handle_whatsapp_event(data: dict):
                 "messages": [],  
                 "agent_first_run": True,             
                 "needs_clarification": False,
-                "uoc_last_called_by": None,
+                "uoc_last_called_by": None, 
                 "uoc_confidence": "low",
                 "uoc": {}, 
                 "user_full_name": user_name,    
-                "user_stage": user_stage,    
+                "user_stage": "new",    
             }
         else:
             state["user_full_name"] = user_name
-            state["user_stage"] = user_stage  
+            state["user_stage"] = "new" 
+            
+            
+ 
+        try:
+            async with AsyncSessionLocal() as session:
+                print("Webhook :::::: whatsapp_webhook::::: Upserting user with sender_id:", sender_id)
+                await user_onboarding_manager.ensure_user_and_state_fields(
+                    session,
+                    sender_id=sender_id,
+                    user_full_name=user_name,
+                    user_stage=UserStage.NEW, 
+                    user_identity=None,  # or the E.164 phone if you treat it as identity
+                    state = state
+                )
+                await session.commit()
+                print("Webhook:::whatsapp_webhook::::: Users Category is  ", state)
+        except Exception as e:
+            print("Webhook :::::: user upsert failed:", e)
+        role = await user_onboarding_manager.get_user_role(session, sender_id=sender_id)
+        state["user_category"] = role 
         if msg_type == "text":
             text = msg["text"]["body"]
             state["messages"].append({"role": "user", "content": text})
@@ -442,7 +463,7 @@ async def handle_whatsapp_event(data: dict):
                 "role": "user",
                 "content": f"[Image ID: {media_id}] {caption}"  # Or you could pass separately
             })
-            state["media_id"] = media_id  
+            state["media_id"] = media_id   
             state["image_path"] = image_path  
             state["caption"] = caption
             state["msg_type"] = "image"
@@ -457,7 +478,7 @@ async def handle_whatsapp_event(data: dict):
                 reply_id = msg["interactive"]["list_reply"]["id"]
             else:
                 reply_id = "unknown_interactive"
-    
+             
             state["messages"].append({"role": "user", "content": reply_id})
             state["msg_type"] = "interactive"
             print(f"Webhook :::::: whatsapp_webhook::::: Captured interactive reply: {reply_id}")
@@ -632,7 +653,14 @@ async def handle_whatsapp_event(data: dict):
                             followups_state = await classify_and_respond(state, config={"configurable": {"crud": crud}})
                     except Exception as e:
                         print("Webhook :::::: whatsapp_webhook::::: Error calling classify_and_respond in onboarding:", e)
-            
+            # elif q_type == "user_onboarding":
+            #         print("Webhook :::::: whatsapp_webhook::::: <pending_question True>::::: -- The set question type is random, so calling ??classify_and_respond?? --")
+            #         try:
+            #             async with AsyncSessionLocal() as session:
+            #                 crud = DatabaseCRUD(session)
+            #                 followups_state = await classify_and_respond(state, config={"configurable": {"crud": crud}})
+            #         except Exception as e:
+            #             print("Webhook :::::: whatsapp_webhook::::: Error calling classify_and_respond in onboarding:", e)
             
             elif q_type == "project_formation":
                 whatsapp_output(sender_id, random.choice(PROJECT_FORMATION_MESSAGES), message_type="plain")
@@ -797,22 +825,30 @@ async def handle_whatsapp_event(data: dict):
 # No need to go back to orchestrator (builder_graph) — decision was made earlier.
 #The main question may arise from the lack of clairty of who owns the control flow and the return path?  - Which is now addressed by the above code.
            
-        elif state.get("needs_clarification") is False:
+        elif state.get("needs_clarification") is False :
             print("Webhook :::::: whatsapp_webhook::::: <needs_clarification False>:::::  -- Calling orchestrator, this is a first time message --")
-            #whatsapp_output(sender_id, random.choice(FIRST_TI ME_MESSAGES), message_type="plain")
-            state["user_full_name"] = user_name  # Update the user's full name in the state
-            #result = await builder_graph.ainvoke(state)
-            
-            print("Calling builder_graph:", builder_graph)
-            print("Type of builder_graph:", type(builder_graph))
-            #PassingDB Session as a  contextwrapper to Langgraph; dont send crud in a state, it break the serialization. 
-            async with AsyncSessionLocal() as session:
-             crud = DatabaseCRUD(session)
-             result = await builder_graph.ainvoke(input=state, config={"crud": crud})
-             
+            print("Calling builder_graph with user category is:", state.get("user_category"))
+            if  state.get("user_category") == "VENDOR":
+                print("Calling vendor_agent directly")
+                result = {
+                    "latest_respons": "Hello Vendor! How can I assist you today?",
+                    "uoc_next_message_type": "plain",
+                    "uoc_next_message_extra_data": None
+                }
+            elif state.get("user_category") == "BUILDER" or state.get("user_category") == "USER" or state.get("user_category") is None:
+            #whatsapp_output(sender_id, random.choice(FIRST_TIME_MESSAGES), message_type="plain")
+                state["user_full_name"] = user_name  # Update the user's full name in the state
+                #result = await builder_graph.ainvoke(state)
+                
+                print("Calling builder_graph:", builder_graph)
+                print("Type of builder_graph:", type(builder_graph))
+                #PassingDB Session as a  contextwrapper to Langgraph; dont send crud in a state, it break the serialization. 
+                async with AsyncSessionLocal() as session:
+                    crud = DatabaseCRUD(session)
+                    result = await builder_graph.ainvoke(input=state, config={"crud": crud})
+                    print("Result from builder_graph:", result)
  
-
-            save_state(sender_id, result)
+                save_state(sender_id, result) 
             #print("Webhook :::::: whatsapp_webhook::::: <needs_clarification False>:::::  -- Got result from the Orchestrator, saved the state : --", get_state(sender_id))
             # print("result after saving in condition ", result)
         # Send final reply

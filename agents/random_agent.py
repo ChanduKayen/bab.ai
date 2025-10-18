@@ -30,8 +30,15 @@ from agents.siteops_agent import run_siteops_agent
 from agents.credit_agent import run_credit_agent
 # >>> NEW: use your Convo Router
 from utils.convo_router import route_and_respond 
+from users import user_onboarding_manager
+import fastapi
+import requests
 
 load_dotenv()
+
+# WhatsApp / Facebook access token used for media uploads; set via environment variable
+ACCESS_TOKEN = os.getenv("WHATSAPP_ACCESS_TOKEN") or os.getenv("ACCESS_TOKEN") or ""
+
 log = logging.getLogger("bab.random_router")
 
 llm = ChatOpenAI(
@@ -44,6 +51,15 @@ llm = ChatOpenAI(
 # Strict JSON helper (balanced braces, code-fence tolerant)
 # ------------------------------------------------------------------
 _JSON_ANY = re.compile(r"\{.*?\}", re.S)
+def upload_media_from_path( file_path: str, mime_type: str = "image/jpeg") -> str:
+    url = f"https://graph.facebook.com/v19.0/712076848650669/media"
+    headers = {"Authorization": f"Bearer {ACCESS_TOKEN}"}
+    files = {"file": (os.path.basename(file_path), open(file_path, "rb"), mime_type)}
+    data = {"messaging_product": "whatsapp"}
+    r = requests.post(url, headers=headers, files=files, data=data)
+    r.raise_for_status()
+    print("rocurement Agent::: upo;ad media from path :::Status",r)
+    return r.json()["id"]
 
 def strict_json(text: str) -> Dict[str, Any]:
     raw = (text or "").strip()
@@ -410,8 +426,76 @@ async def classify_and_respond(state: AgentState, config: Optional[Dict[str, Any
     print("Random Agent::: Classify and respond ::: Called --------- ", intent)
     if last_lower in _HANDLER_MAP:
         return await _HANDLER_MAP[last_lower](state, latest_response=state.get("latest_respons", ""), config=config)
+    elif last_msg.lower() == "builder_user" or last_msg.lower() == "vendor_user":
+        state["user_category"] = "builder" if last_msg.lower() == "builder_user" else "vendor"
+        print(f"Random Agent:::: run_radom_agent : User category set to {state['user_category']}")
+        try:
+            async with AsyncSessionLocal() as session:
+                    #crud = ProcurementCRUD(session)
+                    await user_onboarding_manager.set_user_role(session, sender_id= state.get("sender_id", ""), role= state["user_category"])
 
-   
+        except Exception as e:
+            print("Random Agent::: Classify and respond  : failed to update user category in DB:", e)
+            state["latest_respons"] = "Sorry, there was a system error. Please try again later."
+        
+        state["uoc_next_message_type"] = "button"
+        state["uoc_question_type"] = "onboarding"
+        if state["user_category"] == "builder":
+            image_path = "C:/Users/koppi/OneDrive/Desktop/Thirtee/Marketing/builder_welcome.png"
+            media_id = upload_media_from_path( image_path, "image/jpeg")
+            state["latest_respons"] = """👋 *Welcome to Thirtee, Builder!* — where I help builders like you connect with manufacturers — effortlessly, instantly, and right at your fingertips.
+
+            You’re now set up as a *Builder*. Let’s get your first requirement rolling.
+            """
+            state["uoc_next_message_extra_data"] = {"buttons":  [
+                     {"id": "rfq", "title": "📷 Share Requirement"}
+    
+                ],
+                "media_id": media_id,   
+                "media_type": "image",
+                }
+
+            
+            #"media_id": media_id,   --Temporarily disabling content media
+                #"media_type": "image",
+            
+            media_id = upload_media_from_path( image_path, "image/jpeg")
+            
+            state["needs_clarification"] = True
+            
+        else:
+            state["latest_respons"] = """👋 *Welcome to Thirtee, Supplier!* — where vendors connect directly with builders"""
+            state["uoc_question_type"] = "vendor_new_user_flow"
+            state["uoc_next_message_extra_data"] = [
+                {"id": "vendor_onboarding", "title": "🏭 Vendor Onboarding"}
+            ]
+        state["needs_clarification"] = True
+        return state
+    
+
+     #########Identifiying user category###################
+    if state.get("user_category", "") == None or state.get("user_category", "") == "USER":
+        print("Random Agent::: Classify and respond  : User category not set")
+        message = """👋 *Hola!* I am Thirtee, your smart assistant for construction procurement and credit.
+
+Are you a *Builder* looking for materials or a *Supplier* supplying them?
+
+_This is a one-time question. It helps personalise your experience_"""
+
+        state["latest_respons"] = message
+        state["uoc_next_message_type"] = "button"
+        state["uoc_question_type"] = "onboarding"
+        state["needs_clarification"] = True
+        state["uoc_next_message_extra_data"] = [
+            {"id": "builder_user", "title": "👷‍♂️ Builder"},
+            {"id": "vendor_user", "title": "🏭 Supplier"},
+        ]
+        # whatsapp_output(state.get("sender_id", ""), message, message_type="button",extra_data= [
+        #     {"id": "builder_user", "title": "👷‍♂️ Builder"},
+        #     {"id": "vendor_user",  "title": "🏭 Supplier"},
+        # ])
+        return state
+
     image_present = bool(state.get("image_path"))
     if (not last_msg and not re.search(r"\w", last_msg or "")) and not image_present:
         state.update(

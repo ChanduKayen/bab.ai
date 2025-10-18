@@ -14,7 +14,7 @@ async def run_with_engagement(sender_id: str, work_coro, *, first_nudge_after: i
         sender_id,
         """✅ *Got it*
 
-→ We’re formatting your requirement into a professinal list.
+We’ll format your details and present them in a refined, professional way to get accurate and reliable quotations from manufacturers.
 """
     )
 
@@ -27,9 +27,9 @@ async def run_with_engagement(sender_id: str, work_coro, *, first_nudge_after: i
                 # A single, useful heartbeat (no spam)
                 whatsapp_output(
                     sender_id,
-                    """⏳ *Processing your request…*
+                    """⏳ *Almost there…*
 
-_Please allow up to 2 minutes._
+_Just refining your details - this might take a minute or two._
                     """,
                     message_type="plain",
                     extra_data=[

@@ -16,7 +16,7 @@ _llm = ChatOpenAI(model="gpt-4o-mini", temperature=0, openai_api_key=os.getenv("
 ALLOWED = {
   "procurement": [
     "start_order",        # ask/confirm materials, qty, units, location, need-by
-    "order_followup",     # track / modify / compare / issue — all post-order actions
+    "quote_followup",     # track / modify / compare / issue — all post-quote actions
     "upload",             # photo/invoice/BOQ intake that drafts an order
     "help"                # quick Qs about process/pricing without details yet
   ],
@@ -44,7 +44,7 @@ _JSON_ANY = re.compile(r"\{.*?\}", re.S)
 REQUIRED_SLOTS = {
   # Procurement
   ("procurement","start_order"):   ["materials","quantity","units","location","needed_by_date"],
-  ("procurement","order_followup"):["order_id"],
+  ("procurement","quote_followup"):["order_id"],
   ("procurement","upload"):        ["doc_present","doc_type"],   # {"photo","invoice","boq","other"}
   ("procurement","help"):          [],
 
@@ -403,7 +403,7 @@ async def route_and_respond(state: Dict[str, Any]) -> Dict[str, Any]:
     #if state["last_known_intent"] not in {"procurement","credit","siteops"} and chosen_intent =="random":
 
  
-    if chosen_intent =="procurement" and context in {"start_order","order_followup","upload","upload_doc","help", "chit-chat"}:
+    if chosen_intent =="procurement" and context in {"start_order","quote_followup","upload","upload_doc","help", "chit-chat"}:
         print("Convo Router :::::: Route and Respond:::: PRocurement intent - trying_to_understand_process", "get_quotes")
         from agents.procurement_agent import run_procurement_agent
         

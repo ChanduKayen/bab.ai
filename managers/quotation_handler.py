@@ -74,6 +74,7 @@ async def send_quote_request_to_vendor(
 
 
 async def notify_user_quote_ready(
+    state: dict,
     user_id: str,
     request_id: str,
     *,
@@ -94,19 +95,28 @@ async def notify_user_quote_ready(
     ]
 
     url = _quote_summary_url(request_id)
-    if url:
-        whatsapp_output(
-            to_number=user_id,
-            message_text="\n".join(message_lines),
-            message_type="link_cta",
-            extra_data={"display_text": "View Request", "url": url},
-        )
-    else:
-        whatsapp_output(
-            to_number=user_id,
-            message_text="\n".join(message_lines),
-            message_type="plain",
-        )
+    state.update(
+        intent="rfq",
+        latest_respons= "\n".join(message_lines),
+        uoc_next_message_type="link_cta",
+        uoc_question_type="quote_request",
+        uoc_next_message_extra_data= {"display_text": "Choose Vendors Quotes", "url": url} if url else None,
+    )
+
+    return state
+    # if url:
+    #     whatsapp_output(
+    #         to_number=user_id,
+    #         message_text="\n".join(message_lines),
+    #         message_type="link_cta",
+    #         extra_data={"display_text": "View Quotes", "url": url},
+    #     )
+    # else:
+    #     whatsapp_output(
+    #         to_number=user_id,
+    #         message_text="\n".join(message_lines),
+    #         message_type="plain",
+    #     )
 
 
 async def handle_quote_flow(
@@ -178,13 +188,13 @@ async def handle_quote_flow(
     state["uoc_question_type"] = "quote_request"
 
     if notified_labels:
-        state["latest_response"] = (
+        state["latest_respons"] = (
             "Quote requests sent for "
             f"{_format_project_line(project_name, project_location)} to: "
             f"{', '.join(notified_labels)}. We'll let you know as responses arrive."
         )
     else:
-        state["latest_response"] = (
+        state["latest_respons"] = (
             "We could not reach any vendors for this request yet. "
             "We'll notify you as soon as we do."
         )
@@ -193,6 +203,7 @@ async def handle_quote_flow(
     print("quotation_handler ::::: handle_quote_flow :::: request id", request_id)
     try:
         await notify_user_quote_ready(
+            state,
             user_id=user_id,
             request_id=request_id,
             project_name=project_name,
