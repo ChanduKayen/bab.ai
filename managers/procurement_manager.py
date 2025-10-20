@@ -159,6 +159,54 @@ class ProcurementManager:
             print("[Persist Procurement] Failed to save procurement:", e)
             raise
 
+    async def append_materials_to_request(self, request_id: str, materials) -> int:
+        """
+        Append additional material rows to an existing draft request.
+        Returns count of valid items appended.
+        """
+        materials = self._as_list_of_dicts(materials)
+        request_items = []
+
+        for idx, m in enumerate(materials):
+            if not isinstance(m, dict):
+                continue
+
+            material_name   = (m.get("material") or "").strip() or None
+            sub_type        = (m.get("sub_type") or "").strip() or None
+            dimensions      = (m.get("dimensions") or "").strip() or None
+            dimension_units = (m.get("dimension_units") or "").strip() or None
+
+            quantity        = self._to_number(m.get("quantity"))
+            quantity_units  = (m.get("quantity_units") or "").strip() or None
+            unit_price      = self._to_number(m.get("unit_price"))
+            vendor_notes    = (m.get("vendor_notes") or "").strip() or None
+
+            if material_name and quantity is None:
+                quantity = 1
+                if not quantity_units:
+                    quantity_units = "units"
+
+            if not material_name or quantity is None:
+                continue
+
+            request_items.append({
+                "material_name": material_name,
+                "sub_type": sub_type,
+                "dimensions": dimensions,
+                "dimension_units": dimension_units,
+                "quantity": quantity,
+                "quantity_units": quantity_units,
+                "unit_price": unit_price,
+                "status": RequestStatus.DRAFT,
+                "vendor_notes": vendor_notes,
+            })
+
+        if not request_items:
+            return 0
+
+        await self.crud.update_material_request_items(request_id, request_items)
+        return len(request_items)
+
     async def update_procurement_request(self, request_id: str, state: AgentState):
         """
         Update an existing material request (after full details confirmed).
@@ -202,6 +250,5 @@ class ProcurementManager:
             print("[Update Procurement] Request and items updated after confirmation.")
         except Exception as e:
             print("[Update Procurement] Failed to update request:", e)
-
 
 

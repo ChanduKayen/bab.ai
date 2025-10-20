@@ -21,6 +21,7 @@ from managers.quotation_handler import (
     notify_user_vendor_quote_update,
     send_vendor_order_confirmation,
 )
+from managers.order_context import OrderContextService
 
 class MaterialItem(BaseModel):
     material_name: str
@@ -260,6 +261,15 @@ async def get_sku_details(
     except Exception as e:
         print(f"apis ::::: get_sku_details ::::: exception caught : {e}")
 
+@router.get("/procurement/orders/{sender_id}")
+async def get_orders_for_sender(sender_id: str, limit: int = Query(20, ge=1, le=50)):
+    try:
+        async with AsyncSessionLocal() as session:
+            service = OrderContextService(session)
+            payload = await service.get_orders_for_sender(sender_id, limit=limit)
+            return payload
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 def get_review_order_url(url: str, headers: dict = None, params: dict = None) -> str:
     try:

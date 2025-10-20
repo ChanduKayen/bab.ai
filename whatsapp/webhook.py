@@ -239,27 +239,27 @@ async def handle_whatsapp_event(data: dict):
         if "messages" not in entry:
             logger.info("No messages found in the entry.")
             return {"status": "ignored", "reason": "No messages found"}
-        msg = entry["messages"][0]
-        
-        
-        print("Webhook :::::: whatsapp_webhook::::: Received message:", msg)
-        sender_id = msg["from"]
-        msg_type = msg["type"]
+        messages = entry.get("messages") or []
+        if not messages:
+            logger.info("No messages found in the entry.")
+            return {"status": "ignored", "reason": "No messages found"}
+
         contacts = entry.get("contacts", [])
         user_name = None
-
         if contacts and isinstance(contacts[0], dict):
             profile = contacts[0].get("profile", {})
             if isinstance(profile, dict):
                 user_name = profile.get("name")
         print("Webhook :::::: whatsapp_webhook::::: usrname:", user_name)
-        
+
+        first_msg = messages[0]
+        sender_id = first_msg["from"]
         state = get_state(sender_id)  # Retrieve the state from Redis
         #state["user_full_name"] = user_name  
         #user = user_status(sender_id, user_name) # Dummied
         user = {"user_full_name": user_name, "user_stage": "new"}
         user_stage = user["user_stage"]
-        
+
         if state is None:
             state = {
                 "sender_id": sender_id,
@@ -275,98 +275,119 @@ async def handle_whatsapp_event(data: dict):
         else:
             state["user_full_name"] = user_name
             state["user_stage"] = user_stage  
-        if msg_type == "text":
-            text = msg["text"]["body"]
-            state["messages"].append({"role": "user", "content": text})
-            state["msg_type"] = "text"
-        
-        elif msg_type == "image":
-            media_id = msg["image"]["id"]
-            caption = msg["image"].get("caption", "")
-        
-            image_path = download_whatsapp_image(media_id)
-            print("Webhook :::::: whatsapp_webhook::::: Image downloaded, path:", image_path)
-            state["messages"].append({
-                "role": "user",
-                "content": f"[Image ID: {media_id}] {caption}"  # Or you could pass separately
-            })
-            state["media_id"] = media_id  
-            state["image_path"] = image_path  
-            state["caption"] = caption
-            state["msg_type"] = "image"
-            state["media_url"] = image_path
-        
-            print("Webhook :::::: whatsapp_webhook::::: Image downloaded and saved at:", image_path)
-        elif msg_type == "interactive":
-            interactive_type = msg["interactive"]["type"]
-            if interactive_type == "button_reply":
-                reply_id = msg["interactive"]["button_reply"]["id"]
-            elif interactive_type == "list_reply":
-                reply_id = msg["interactive"]["list_reply"]["id"]
-            else:
-                reply_id = "unknown_interactive"
-    
-            state["messages"].append({"role": "user", "content": reply_id})
-            state["msg_type"] = "interactive"
-            print(f"Webhook :::::: whatsapp_webhook::::: Captured interactive reply: {reply_id}")
+        new_photos = []
+        for msg in messages:
+            print("Webhook :::::: whatsapp_webhook::::: Received message:", msg)
+            msg_type = msg["type"]
+            sender_id = msg.get("from", sender_id)
 
-        elif msg_type == "document":
-            media_id  = msg["document"]["id"]
-            file_name = msg["document"].get("filename", "document")
+            if msg_type == "text":
+                text = msg["text"]["body"]
+                state["messages"].append({"role": "user", "content": text})
+                state["msg_type"] = "text"
 
-            # Fetch download URL & metadata
-            meta_resp = requests.get(
-                f"https://graph.facebook.com/v19.0/{media_id}",
-                params={"access_token": ACCESS_TOKEN},
-                timeout=10,
-            )
+            elif msg_type == "image":
+                media_id = msg["image"]["id"]
+                caption = msg["image"].get("caption", "")
 
-            if meta_resp.status_code != 200:
-                print("Webhook :::::: Failed to fetch document meta:", meta_resp.text)
-                return {"status": "ignored", "reason": "Cannot fetch document"}
-            
-            media_info = meta_resp.json()
-            media_url  = media_info.get("url")
-            mime_type  = media_info.get("mime_type", "")
-            
-            # Decide file type
-            file_type = "pdf" if mime_type == "application/pdf" else "document"
+                image_path = download_whatsapp_image(media_id)
+                print("Webhook :::::: whatsapp_webhook::::: Image downloaded, path:", image_path)
+                state["messages"].append({
+                    "role": "user",
+                    "content": f"[Image ID: {media_id}] {caption}"
+                })
+                state["msg_type"] = "image"
+                state["media_url"] = image_path
+                new_photos.append({
+                    "image_path": image_path,
+                    "caption": caption,
+                })
 
-            # Download the file
-            ext = ".pdf" if file_type == "pdf" else ".bin"
-            local_path = MEDIA_DOWNLOAD_DIR / f"{media_id}{ext}"
-            try:
-                file_data = requests.get(media_url, timeout=10).content
-                with open(local_path, "wb") as fp:
-                    fp.write(file_data)
-                print(f"Webhook :::::: Saved document to {local_path}")
-            except Exception as e:
-                print("Webhook :::::: Failed to download and save document:", e)
-                return {"status": "ignored", "reason": "Failed to download"}
+                print("Webhook :::::: whatsapp_webhook::::: Image downloaded and saved at:", image_path)
 
-            # Try optional text extraction for PDFs
-            if file_type == "pdf":
+            elif msg_type == "interactive":
+                interactive_type = msg["interactive"]["type"]
+                if interactive_type == "button_reply":
+                    reply_id = msg["interactive"]["button_reply"]["id"]
+                elif interactive_type == "list_reply":
+                    reply_id = msg["interactive"]["list_reply"]["id"]
+                else:
+                    reply_id = "unknown_interactive"
+
+                state["messages"].append({"role": "user", "content": reply_id})
+                state["msg_type"] = "interactive"
+                state.pop("image_path", None)
+                state.pop("media_id", None)
+                state.pop("caption", None)
+                state.pop("media_url", None)
+                print(f"Webhook :::::: whatsapp_webhook::::: Captured interactive reply: {reply_id}")
+
+            elif msg_type == "document":
+                media_id = msg["document"]["id"]
+                file_name = msg["document"].get("filename", "document")
+
+                # Fetch download URL & metadata
+                meta_resp = requests.get(
+                    f"https://graph.facebook.com/v19.0/{media_id}",
+                    params={"access_token": ACCESS_TOKEN},
+                    timeout=10,
+                )
+
+                if meta_resp.status_code != 200:
+                    print("Webhook :::::: Failed to fetch document meta:", meta_resp.text)
+                    return {"status": "ignored", "reason": "Cannot fetch document"}
+
+                media_info = meta_resp.json()
+                media_url = media_info.get("url")
+                mime_type = media_info.get("mime_type", "")
+
+                # Decide file type
+                file_type = "pdf" if mime_type == "application/pdf" else "document"
+
+                # Download the file
+                ext = ".pdf" if file_type == "pdf" else ".bin"
+                local_path = MEDIA_DOWNLOAD_DIR / f"{media_id}{ext}"
                 try:
-                    import fitz  # PyMuPDF
-                    doc = fitz.open(str(local_path))
-                    pdf_text = "".join(page.get_text() for page in doc)
-                    doc.close()
-                    state["pdf_text"] = pdf_text
+                    file_data = requests.get(media_url, timeout=10).content
+                    with open(local_path, "wb") as fp:
+                        fp.write(file_data)
+                    print(f"Webhook :::::: Saved document to {local_path}")
                 except Exception as e:
-                    print("Webhook :::::: PDF text extraction failed:", e)
+                    print("Webhook :::::: Failed to download and save document:", e)
+                    return {"status": "ignored", "reason": "Failed to download"}
 
-            # Add synthetic user message & metadata
-            state["messages"].append({
-                "role": "user",
-                "content": f"[Document ID: {media_id}] {file_name}"
-            })
+                # Try optional text extraction for PDFs
+                if file_type == "pdf":
+                    try:
+                        import fitz  # PyMuPDF
+                        doc = fitz.open(str(local_path))
+                        pdf_text = "".join(page.get_text() for page in doc)
+                        doc.close()
+                        state["pdf_text"] = pdf_text
+                    except Exception as e:
+                        print("Webhook :::::: PDF text extraction failed:", e)
 
-            state["media_id"] = media_id
-            state["file_name"] = file_name
-            state["msg_type"] = file_type
-            state["media_url"] = str(local_path)
-        else:
-            return {"status": "ignored", "reason": f"Unsupported message type {msg_type}"}
+                # Add synthetic user message & metadata
+                state["messages"].append({
+                    "role": "user",
+                    "content": f"[Document ID: {media_id}] {file_name}"
+                })
+
+                state["media_id"] = media_id
+                state["file_name"] = file_name
+                state["msg_type"] = file_type
+                state["media_url"] = str(local_path)
+            else:
+                print(f"Webhook :::::: whatsapp_webhook::::: Unsupported message type {msg_type}")
+                continue
+
+        msg = messages[-1]
+
+        if new_photos:
+            state["batched_photos"] = new_photos
+            first_photo = new_photos[0]
+            state["image_path"] = first_photo["image_path"]
+            state["caption"] = first_photo.get("caption", "")
 
 
 

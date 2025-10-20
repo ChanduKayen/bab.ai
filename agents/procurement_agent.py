@@ -2,13 +2,19 @@
 
 import asyncio
 import base64, requests
-from typing import List
+from datetime import datetime, timedelta, timezone
+from typing import Any, Dict, List, Optional
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import SystemMessage, HumanMessage
 from managers.uoc_manager import UOCManager
 from whatsapp.builder_out import whatsapp_output
 import os
 from managers.procurement_manager import ProcurementManager
+from managers.order_context import OrderContextService
+from managers.quotation_handler import (
+    notify_user_vendor_confirmed,
+    notify_user_vendor_declined,
+)
 from models.chatstate import AgentState
 from database.procurement_crud import ProcurementCRUD
 from database.uoc_crud import DatabaseCRUD
@@ -21,12 +27,10 @@ from app.db import get_sessionmaker
 AsyncSessionLocal = get_sessionmaker()
 
 from whatsapp import apis
-from whatsapp.builder_out import whatsapp_output
 from agents.credit_agent import run_credit_agent
-from whatsapp.engagement import run_with_engagement
 from utils.convo_router import route_and_respond
-from utils.content_card import generate_review_order_card
 from pathlib import Path
+from whatsapp.engagement import run_with_engagement
 
 # -----------------------------------------------------------------------------
 # Environment & Model Setup
@@ -189,6 +193,859 @@ def _last_two_user_msgs(state: dict) -> tuple[str, str]:
     return prev.strip(), last.strip()
 
 # -----------------------------------------------------------------------------
+# Order context helpers
+# -----------------------------------------------------------------------------
+RECENT_DRAFT_WINDOW = timedelta(hours=4)
+NEW_ORDER_PHOTO_BUTTON_ID = "start_new_order_from_photo"
+FOCUS_MORE_BUTTON_ID = "focus_more"
+ADD_MORE_PHOTOS_BUTTON_ID = "add_more_photos"
+GENERATE_ORDER_BUTTON_ID = "generate_order"
+BULK_AUTO_FINALIZE_SECONDS = 120
+
+_bulk_finalize_tasks: Dict[str, asyncio.Task] = {}
+
+
+def _parse_iso_datetime(value: Optional[str]) -> Optional[datetime]:
+    if not value:
+        return None
+    try:
+        value = value.replace("Z", "+00:00")
+        return datetime.fromisoformat(value)
+    except Exception:
+        return None
+
+
+def _humanize_timestamp(dt: Optional[datetime]) -> str:
+    if not dt:
+        return "recently"
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    now = datetime.now(tz=dt.tzinfo)
+    if dt.date() == now.date():
+        return dt.strftime("%I:%M %p").lstrip("0")
+    if (now.date() - dt.date()).days == 1:
+        return "yesterday " + dt.strftime("%I:%M %p").lstrip("0")
+    return dt.strftime("%d %b %I:%M %p").lstrip("0")
+
+
+def _vendor_summary(record: dict) -> Optional[str]:
+    approved = record.get("approved_vendor") or {}
+    name = approved.get("name")
+    if name:
+        return name
+    vendors = record.get("vendors") or []
+    names = [v.get("name") for v in vendors if v.get("name")]
+    if not names:
+        return None
+    if len(names) == 1:
+        return names[0]
+    if len(names) == 2:
+        return ", ".join(names)
+    return ", ".join(names[:2]) + " +"
+
+
+def _primary_category(record: dict) -> str:
+    categories = record.get("vendor_categories") or []
+    if categories:
+        return categories[0]
+    samples = record.get("sample_materials") or []
+    if samples:
+        return samples[0]
+    return "materials"
+
+
+def _compose_draft_prompt(drafts: list[dict]) -> tuple[str, list[dict], dict]:
+    lines = ["I found draft orders you started recently:"]
+    buttons: list[dict] = []
+    option_map: dict[str, dict] = {}
+
+    for idx, record in enumerate(drafts, start=1):
+        vendor_label = _vendor_summary(record) or "Draft order"
+        category_label = _primary_category(record)
+        updated_at = _parse_iso_datetime(record.get("updated_at"))
+        human_time = _humanize_timestamp(updated_at)
+
+        full_line = f"{idx}. {vendor_label} – {category_label} ({human_time})"
+        lines.append(full_line)
+
+        short_vendor = vendor_label if len(vendor_label) <= 18 else vendor_label[:17] + "…"
+        button_id = f"merge_draft_{record['request_id']}"
+        buttons.append({"id": button_id, "title": f"Add: {short_vendor}"})
+        option_map[str(record["request_id"])] = record
+
+    buttons.append({"id": NEW_ORDER_PHOTO_BUTTON_ID, "title": "New order"})
+
+    message = "\n".join(lines) + "\n\nShould I add these materials to one of them or start a new order?"
+    return message, buttons, option_map
+
+
+async def _fetch_recent_drafts(sender_id: str, limit: int = 10) -> list[dict]:
+    async with AsyncSessionLocal() as session:
+        service = OrderContextService(session)
+        context = await service.get_orders_for_sender(sender_id, limit=limit)
+
+    drafts = context.get("draft", []) if context else []
+    if not drafts:
+        return []
+
+    threshold = datetime.now(timezone.utc) - RECENT_DRAFT_WINDOW
+    recent: list[dict] = []
+    for record in drafts:
+        updated_at = _parse_iso_datetime(record.get("updated_at"))
+        if not updated_at:
+            recent.append(record)
+            continue
+        if updated_at.tzinfo is None:
+            updated_at = updated_at.replace(tzinfo=timezone.utc)
+        if updated_at >= threshold:
+            recent.append(record)
+    return recent
+
+
+def _store_pending_photo(state: dict, image_path: str, caption: Optional[str]) -> None:
+    state["pending_photo"] = {
+        "image_path": image_path,
+        "caption": caption or "",
+        "stored_at": datetime.utcnow().isoformat(),
+    }
+
+
+def _clear_pending_photo_state(state: dict) -> None:
+    state.pop("pending_photo", None)
+    state.pop("awaiting_photo_merge_decision", None)
+
+
+async def _extract_items_from_photo(state: dict, photo: dict, *, suppress_engagement: bool = False) -> list[dict]:
+    sender_id = state.get("sender_id")
+    img_path = photo.get("image_path")
+    caption = photo.get("caption", "")
+    img_b64 = None
+    if img_path and os.path.exists(img_path):
+        img_b64 = encode_image_base64(img_path)
+
+    combined = caption.strip()
+    if suppress_engagement:
+        items = await extract_materials(combined, img_b64)
+    else:
+        items = await run_with_engagement(
+            sender_id=sender_id,
+            work_coro=extract_materials(combined, img_b64),
+            first_nudge_after=8,
+        )
+    return items or []
+
+
+async def _prepare_review_response(state: dict, request_id: Optional[str], items: list[dict]) -> None:
+    item_lines: List[str] = []
+    for item in items[:5]:
+        name = item.get("material") or "Material"
+        qty = item.get("quantity")
+        unit = item.get("quantity_units")
+        if qty is not None and unit:
+            item_lines.append(f"• {name} – {qty} {unit}")
+        elif qty is not None:
+            item_lines.append(f"• {name} – {qty}")
+        else:
+            item_lines.append(f"• {name}")
+    if len(items) > 5:
+        item_lines.append("• …")
+
+    message_lines = ["*Your request is ready.*", "", "Please review unclear items before continuing."]
+    if item_lines:
+        message_lines.append("")
+        message_lines.append("Items captured:")
+        message_lines.extend(item_lines)
+
+    review_url = apis.get_review_order_url(
+        os.getenv("REVIEW_ORDER_URL_BASE", ""),
+        {},
+        {
+            "senderId": state.get("sender_id", ""),
+            "uuid": request_id or state.get("active_material_request_id", ""),
+        },
+    )
+
+    state.update(
+        latest_respons="\n".join(message_lines).strip(),
+        uoc_next_message_type="link_cta",
+        uoc_question_type="procurement_new_user_flow",
+        uoc_next_message_extra_data={
+            "display_text": "Review Order",
+            "url": review_url,
+        },
+        needs_clarification=True,
+        agent_first_run=False,
+    )
+
+
+async def _handle_new_order_workflow(state: dict, items: list[dict]) -> bool:
+    state.setdefault("procurement_details", {})["materials"] = items
+    try:
+        async with AsyncSessionLocal() as session:
+            manager = ProcurementManager(session)
+            await manager.persist_procurement(state)
+    except Exception as exc:
+        print("Procurement Agent:::: _handle_new_order_workflow : Error persisting request:", exc)
+        state.update(
+            latest_respons="Sorry, there was an error saving your procurement request. Please try again later.",
+            uoc_next_message_type="plain",
+            needs_clarification=False,
+        )
+        return False
+
+    await _prepare_review_response(state, state.get("active_material_request_id"), items)
+    return True
+
+
+async def _handle_append_workflow(
+    state: dict,
+    request_id: str,
+    items: list[dict],
+    option_map: Optional[Dict[str, dict]] = None,
+) -> bool:
+    try:
+        async with AsyncSessionLocal() as session:
+            manager = ProcurementManager(session)
+            appended = await manager.append_materials_to_request(request_id, items)
+    except Exception as exc:
+        print("Procurement Agent:::: _handle_append_workflow : Error appending materials:", exc)
+        state.update(
+            latest_respons="Couldn't update that draft right now. Please try again shortly.",
+            uoc_next_message_type="plain",
+            needs_clarification=False,
+        )
+        return False
+
+    if appended == 0:
+        state.update(
+            latest_respons="I couldn’t recognise any new materials in that image. Could you resend a clearer photo or describe them?",
+            uoc_next_message_type="plain",
+            needs_clarification=True,
+        )
+        return False
+
+    record = option_map.get(request_id) if option_map else None
+    vendor_label = _vendor_summary(record) if record else None
+    if not vendor_label:
+        vendor_label = "your draft order"
+    category_label = _primary_category(record) if record else "materials"
+
+    review_url = apis.get_review_order_url(
+        os.getenv("REVIEW_ORDER_URL_BASE", ""),
+        {},
+        {"senderId": state.get("sender_id", ""), "uuid": request_id},
+    )
+
+    state.update(
+        latest_respons=(
+            f"Added {appended} item(s) to the draft with {vendor_label} "
+            f"({category_label}). Review and confirm when you're ready."
+        ),
+        uoc_next_message_type="link_cta",
+        uoc_question_type="procurement_new_user_flow",
+        uoc_next_message_extra_data={"display_text": "Review order", "url": review_url},
+        needs_clarification=True,
+        agent_first_run=False,
+        active_material_request_id=request_id,
+    )
+    return True
+
+
+async def _process_pending_photo(state: dict, request_id: Optional[str]) -> dict:
+    photos = state.pop("batched_photos", None)
+    if photos:
+        state.pop("pending_photo", None)
+    else:
+        pending = state.get("pending_photo")
+        if not pending:
+            state.update(
+                latest_respons="I couldn’t find that photo. Please resend it and I’ll process it right away.",
+                uoc_next_message_type="plain",
+                needs_clarification=True,
+            )
+            return state
+        photos = [pending]
+        state.pop("pending_photo", None)
+
+    return await _process_photo_batch(state, photos, request_id)
+
+
+async def _process_photo_batch(
+    state: dict,
+    photos: List[dict],
+    request_id: Optional[str],
+) -> dict:
+    aggregated_new_items: List[dict] = []
+    first_photo = True
+    for photo in photos:
+        extracted = await _extract_items_from_photo(state, photo, suppress_engagement=not first_photo)
+        first_photo = False
+        if not extracted:
+            continue
+        _append_bulk_items(state, extracted, photo)
+        aggregated_new_items.extend(extracted)
+
+    if not aggregated_new_items:
+        state.update(
+            latest_respons="I couldn’t recognise any materials in that image. Could you share a clearer photo or describe them?",
+            uoc_next_message_type="plain",
+            needs_clarification=True,
+        )
+        return state
+
+    if request_id is not None:
+        state["bulk_target_request_id"] = request_id
+    elif "bulk_target_request_id" not in state:
+        state["bulk_target_request_id"] = None
+
+    total_items = len(state.get("bulk_pending_items") or [])
+    summary_lines = _build_bulk_summary(state.get("bulk_pending_items") or [])
+    summary_body = "\n".join(summary_lines) if summary_lines else "No materials recognised yet."
+
+    target_record = None
+    if state.get("bulk_target_request_id"):
+        option_map = state.get("pending_photo_options") or {}
+        target_record = option_map.get(state["bulk_target_request_id"])
+
+    if target_record:
+        target_label = _vendor_summary(target_record) or "your draft order"
+    else:
+        target_label = "a new order"
+
+    message_lines = [
+        "🧾 *Photo processed.*",
+        f"Items so far ({total_items}):",
+        summary_body,
+        "",
+        f"This batch will be saved to {target_label}.",
+        "Tap *Add more photos* if you have more pages, or *Generate order* when you're done.",
+    ]
+
+    state.update(
+        latest_respons="\n".join(message_lines).strip(),
+        uoc_next_message_type="button",
+        uoc_question_type="procurement_new_user_flow",
+        uoc_next_message_extra_data={
+            "buttons": [
+                {"id": ADD_MORE_PHOTOS_BUTTON_ID, "title": "Add more photos"},
+                {"id": GENERATE_ORDER_BUTTON_ID, "title": "Generate order"},
+            ]
+        },
+        needs_clarification=True,
+        agent_first_run=False,
+    )
+
+    state["awaiting_photo_merge_decision"] = False
+    _schedule_bulk_auto_finalize(state)
+    return state
+
+
+STATUS_KEYWORDS = (
+    "status",
+    "where",
+    "deliver",
+    "delivery",
+    "arrive",
+    "progress",
+    "update",
+    "quote",
+    "vendor",
+    "confirm",
+)
+
+FOLLOWUP_KEYWORDS = ("status", "delivery", "deliver", "arrive", "confirm", "quote", "update", "progress")
+STATUS_NEW_ORDER_BUTTON_ID = "status_new_order"
+MY_ORDERS_BUTTON_ID = "my_orders"
+def _looks_like_followup(message: str) -> bool:
+    ml = (message or "").lower()
+    return any(word in ml for word in FOLLOWUP_KEYWORDS)
+
+
+def _score_order_for_query(order: dict, message: str) -> int:
+    if not message:
+        return 0
+    message = message.lower()
+    score = 0
+
+    rid = str(order.get("request_id", "")).lower()
+    if rid and rid in message:
+        score += 5
+
+    vendor_names = []
+    approved = order.get("approved_vendor") or {}
+    if approved.get("name"):
+        vendor_names.append(approved["name"])
+    for vendor in order.get("vendors") or []:
+        name = vendor.get("name")
+        if name:
+            vendor_names.append(name)
+    for name in vendor_names:
+        name_l = name.lower()
+        if name_l and name_l in message:
+            score += 4
+
+    for cat in (order.get("vendor_categories") or []):
+        cat_l = cat.lower()
+        if cat_l and cat_l in message:
+            score += 3
+
+    for material in (order.get("sample_materials") or [])[:3]:
+        mat_l = material.lower()
+        if mat_l and mat_l in message:
+            score += 2
+
+    status = (order.get("status") or "").lower()
+    if "draft" in message and status == "draft":
+        score += 1
+    if "active" in message and status in {"requested", "quoted"}:
+        score += 1
+    if ("delivered" in message or "arrived" in message) and order.get("delivered_at"):
+        score += 2
+
+    return score
+
+
+def _format_date_string(value: Optional[str]) -> Optional[str]:
+    if not value:
+        return None
+    try:
+        if "T" in value:
+            dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
+            return dt.strftime("%d %b %Y")
+        dt = datetime.fromisoformat(value)
+        return dt.strftime("%d %b %Y")
+    except Exception:
+        return None
+
+
+def _build_review_url(sender_id: Optional[str], request_id: Optional[str]) -> Optional[str]:
+    base = os.getenv("REVIEW_ORDER_URL_BASE")
+    if not base or not sender_id or not request_id:
+        return None
+    return f"{base}?senderId={sender_id}&uuid={request_id}"
+
+
+def _build_quote_summary_url(request_id: Optional[str]) -> Optional[str]:
+    base = os.getenv("QUOTE_SUMMARY_URL")
+    if not base or not request_id:
+        return None
+    return f"{base}?uuid={request_id}"
+
+
+def _parse_focus_selection(message: str, index_map: Dict[int, str]) -> Optional[str]:
+    if not message:
+        return None
+    text = message.strip().lower()
+    digits = "".join(ch for ch in text if ch.isdigit())
+    if not digits:
+        return None
+    try:
+        idx = int(digits)
+    except ValueError:
+        return None
+    return index_map.get(idx)
+
+
+def _respond_with_order_detail(state: dict, order: dict) -> None:
+    raw_status = order.get("status")
+    status = (raw_status or "").replace("_", " ").capitalize()
+    short_id = str(order.get("request_id", ""))[:8].upper()
+    vendor_label = _vendor_summary(order) or "No vendor selected yet"
+    category_label = _primary_category(order)
+
+    lines = [f"{status} order {short_id}"]
+    if vendor_label:
+        lines.append(f"Vendor: {vendor_label}")
+
+    delivered_at = _parse_iso_datetime(order.get("delivered_at"))
+    expected = _format_date_string(order.get("expected_delivery_date"))
+    if delivered_at:
+        lines.append(f"Delivered: {_humanize_timestamp(delivered_at)}")
+    elif expected:
+        lines.append(f"Expected delivery: {expected}")
+
+    materials = order.get("sample_materials") or []
+    if materials:
+        lines.append("Key materials: " + ", ".join(materials[:3]))
+
+    lines.append(f"Category: {category_label}")
+    message = "\n".join(lines)
+
+    status_lower = (raw_status or "").lower()
+    if status_lower == "draft":
+        cta_url = _build_review_url(state.get("sender_id"), order.get("request_id"))
+        cta_label = "Review order"
+    else:
+        cta_url = _build_quote_summary_url(order.get("request_id"))
+        cta_label = "Compare quotes"
+
+    state.update(
+        latest_respons=message,
+        uoc_next_message_type="link_cta" if cta_url else "plain",
+        needs_clarification=True,
+        agent_first_run=False,
+        focus_request_id=order.get("request_id"),
+    )
+    if cta_url:
+        state["uoc_next_message_extra_data"] = {"display_text": cta_label, "url": cta_url}
+
+
+def _sections_from_context(context: Dict[str, List[dict]]) -> List[tuple[str, List[dict]]]:
+    sections: List[tuple[str, List[dict]]] = []
+    active = context.get("active") or []
+    drafts = context.get("draft") or []
+    fulfilled = context.get("fulfilled") or []
+    if active:
+        sections.append(("Active orders:", active))
+    if drafts:
+        sections.append(("Draft orders:", drafts))
+    if fulfilled and not sections:
+        sections.append(("Recently fulfilled orders:", fulfilled))
+    return sections
+
+
+def _gather_focus_entries(
+    sections: List[tuple[str, List[dict]]]
+) -> tuple[List[dict], Dict[int, str], dict]:
+    entries: List[dict] = []
+    option_map: dict[str, dict] = {}
+    index_map: Dict[int, str] = {}
+    entry_index = 1
+
+    for heading, orders in sections:
+        if not orders:
+            continue
+        for order in orders:
+            vendor_label = _vendor_summary(order) or "Draft order"
+            category_label = _primary_category(order)
+            status = (order.get("status") or "").capitalize()
+            updated_at = _parse_iso_datetime(order.get("updated_at"))
+            when_text = _humanize_timestamp(updated_at)
+
+            rid = str(order["request_id"])
+            index_map[entry_index] = rid
+            option_map[rid] = order
+            entries.append(
+                {
+                    "index": entry_index,
+                    "request_id": rid,
+                    "heading": heading,
+                    "vendor": vendor_label,
+                    "category": category_label,
+                    "status": status,
+                    "when": when_text,
+                }
+            )
+            entry_index += 1
+
+    return entries, index_map, option_map
+
+
+# -----------------------------------------------------------------------------
+# Bulk Photo Helpers
+# -----------------------------------------------------------------------------
+def _cancel_bulk_auto_finalize(state: dict) -> None:
+    sender_id = state.get("sender_id")
+    if not sender_id:
+        return
+    task = _bulk_finalize_tasks.pop(sender_id, None)
+    if task and not task.done():
+        task.cancel()
+
+
+def _schedule_bulk_auto_finalize(state: dict) -> None:
+    sender_id = state.get("sender_id")
+    if not sender_id:
+        return
+    _cancel_bulk_auto_finalize(state)
+
+    async def _auto_finalize_after_delay() -> None:
+        try:
+            await asyncio.sleep(BULK_AUTO_FINALIZE_SECONDS)
+            if not state.get("bulk_pending_items"):
+                return
+            if state.get("bulk_auto_locked"):
+                return
+            state["bulk_auto_locked"] = True
+            summary = await _finalize_bulk_batch(state, auto=True)
+            if summary:
+                message, message_type, extra = summary
+                whatsapp_output(sender_id, message, message_type=message_type, extra_data=extra)
+            else:
+                state.pop("bulk_auto_locked", None)
+        except asyncio.CancelledError:
+            return
+        finally:
+            _bulk_finalize_tasks.pop(sender_id, None)
+
+    state["bulk_auto_finalize_deadline"] = (
+        datetime.utcnow() + timedelta(seconds=BULK_AUTO_FINALIZE_SECONDS)
+    ).isoformat()
+    _bulk_finalize_tasks[sender_id] = asyncio.create_task(_auto_finalize_after_delay())
+
+
+def _clear_bulk_state(state: dict) -> None:
+    _cancel_bulk_auto_finalize(state)
+    for key in (
+        "bulk_pending_items",
+        "bulk_pending_photos",
+        "bulk_mode_active",
+        "bulk_target_request_id",
+        "bulk_auto_finalize_deadline",
+        "bulk_auto_locked",
+    ):
+        state.pop(key, None)
+    state.pop("pending_photo_options", None)
+    details = state.get("procurement_details")
+    if isinstance(details, dict):
+        details.pop("materials", None)
+    state.pop("batched_photos", None)
+
+
+def _append_bulk_items(state: dict, items: List[dict], photo: dict) -> None:
+    pending_items = list(state.get("bulk_pending_items") or [])
+    pending_items.extend(items)
+    state["bulk_pending_items"] = pending_items
+
+    details = state.setdefault("procurement_details", {})
+    stored = details.get("materials") or []
+    stored = list(stored)
+    stored.extend(items)
+    details["materials"] = stored
+
+    pending_photos = list(state.get("bulk_pending_photos") or [])
+    pending_photos.append(photo)
+    state["bulk_pending_photos"] = pending_photos
+    state["bulk_mode_active"] = True
+
+
+def _build_bulk_summary(items: List[dict], limit: int = 5) -> List[str]:
+    lines: List[str] = []
+    for idx, item in enumerate(items[-limit:], start=max(len(items) - limit + 1, 1)):
+        name = item.get("material") or "Material"
+        qty = item.get("quantity")
+        unit = item.get("quantity_units")
+        if qty is not None and unit:
+            lines.append(f"{idx}. {name} – {qty} {unit}")
+        elif qty is not None:
+            lines.append(f"{idx}. {name} – {qty}")
+        else:
+            lines.append(f"{idx}. {name}")
+    return lines
+
+
+async def _finalize_bulk_batch(state: dict, *, auto: bool = False) -> Optional[tuple[str, str, dict]]:
+    items = state.get("bulk_pending_items") or []
+    if not items:
+        return None
+
+    request_id = state.get("bulk_target_request_id")
+    option_map = state.get("pending_photo_options") or {}
+
+    if request_id:
+        success = await _handle_append_workflow(state, request_id, items, option_map)
+    else:
+        success = await _handle_new_order_workflow(state, items)
+
+    if not success:
+        return None
+
+    message = state.get("latest_respons", "")
+    message_type = state.get("uoc_next_message_type", "plain")
+    extra_data = state.get("uoc_next_message_extra_data")
+
+    _clear_bulk_state(state)
+    if auto:
+        state["needs_clarification"] = False
+    return message, message_type, extra_data
+
+
+def _format_focus_chunk(entries: List[dict]) -> str:
+    if not entries:
+        return "I don't see any orders yet. Start a new one?"
+
+    lines: List[str] = []
+    last_heading: Optional[str] = None
+    for entry in entries:
+        if entry["heading"] != last_heading:
+            lines.append(entry["heading"])
+            last_heading = entry["heading"]
+        lines.append(
+            f"{entry['index']}. {entry['vendor']} – {entry['category']} "
+            f"({entry['status']}, {entry['when']})"
+        )
+    return "\n".join(lines)
+
+
+def _present_focus_options(
+    state: dict,
+    entries: List[dict],
+    index_map: Dict[int, str],
+    option_map: dict,
+    *,
+    max_chars: int = 900,
+    page_size: int = 4,
+) -> None:
+    queue = entries.copy()
+    chunk: List[dict] = []
+    while queue and len(chunk) < page_size:
+        candidate = queue.pop(0)
+        test_chunk = chunk + [candidate]
+        message = _format_focus_chunk(test_chunk)
+        instructions = (
+            message
+            + f"\n\nReply with the order number (e.g., {test_chunk[0]['index']}) to focus on it."
+        )
+        if len(instructions) > max_chars and chunk:
+            queue.insert(0, candidate)
+            break
+        chunk.append(candidate)
+
+    message = _format_focus_chunk(chunk)
+    if chunk:
+        example_idx = chunk[0]["index"]
+        instructions = (
+            message
+            + f"\n\nReply with the order number (e.g., {example_idx}) to focus on it. "
+            + ("Tap More orders to see the next set. " if queue else "")
+            + "Tap ➕ New Order to start a fresh request."
+        )
+    else:
+        instructions = message + "\n\nTap ➕ New Order to create your first request."
+
+    buttons: List[dict] = []
+    if queue:
+        buttons.append({"id": FOCUS_MORE_BUTTON_ID, "title": "More orders"})
+    buttons.append({"id": STATUS_NEW_ORDER_BUTTON_ID, "title": "➕ New Order"})
+
+    state["pending_focus_options"] = option_map
+    state["focus_index_map"] = index_map
+    state["focus_entry_queue"] = queue
+    state.update(
+        latest_respons=instructions,
+        uoc_next_message_type="button",
+        uoc_question_type="procurement_new_user_flow",
+        uoc_next_message_extra_data={"buttons": buttons},
+        needs_clarification=True,
+    )
+
+
+async def _handle_focus_selection(state: dict, request_id: str) -> dict:
+    options = state.get("pending_focus_options") or {}
+    order = options.get(request_id)
+
+    if not order:
+        async with AsyncSessionLocal() as session:
+            service = OrderContextService(session)
+            context = await service.get_orders_for_sender(state.get("sender_id", ""), limit=20)
+        order = None
+        if context:
+            for bucket in ("draft", "active", "fulfilled"):
+                for candidate in context.get(bucket, []):
+                    if str(candidate.get("request_id")) == request_id:
+                        order = candidate
+                        break
+                if order:
+                    break
+            state["order_context_cache"] = context
+
+    if not order:
+        state.update(
+            latest_respons="I couldn’t find that order. Please try again or share the order link.",
+            uoc_next_message_type="plain",
+            needs_clarification=True,
+        )
+        return state
+
+    _respond_with_order_detail(state, order)
+    state.pop("pending_focus_options", None)
+    state.pop("awaiting_focus_selection", None)
+    state.pop("focus_index_map", None)
+    state.pop("focus_entry_queue", None)
+    return state
+
+
+async def _handle_order_status_query(state: dict, query_text: str) -> bool:
+    sender_id = state.get("sender_id")
+    if not sender_id:
+        return False
+
+    force_list = (query_text == MY_ORDERS_BUTTON_ID)
+
+    async with AsyncSessionLocal() as session:
+        service = OrderContextService(session)
+        context = await service.get_orders_for_sender(sender_id, limit=20)
+
+    if not context:
+        state.update(
+            latest_respons="I don’t see any procurement orders for you yet. Share a requirement and I’ll start one.",
+            uoc_next_message_type="plain",
+            needs_clarification=True,
+        )
+        return True
+
+    state["order_context_cache"] = context
+
+    drafts = context.get("draft", [])
+    active = context.get("active", [])
+    fulfilled = context.get("fulfilled", [])
+    all_orders = active + drafts + fulfilled
+
+    if not all_orders:
+        state.update(
+            latest_respons="I don’t see any procurement orders for you yet. Share a requirement and I’ll start one.",
+            uoc_next_message_type="plain",
+            needs_clarification=True,
+        )
+        return True
+
+    order_id_slot = (state.get("extracted_slots") or {}).get("order_id")
+    query_text_lc = (query_text or "").lower()
+
+    candidate = None
+    if order_id_slot and not force_list:
+        order_id_slot = str(order_id_slot).lower()
+        for order in all_orders:
+            rid = str(order.get("request_id", "")).lower()
+            if order_id_slot in rid:
+                candidate = order
+                break
+
+    if not candidate and not force_list:
+        scores = []
+        for order in all_orders:
+            score = _score_order_for_query(order, query_text_lc)
+            if score > 0:
+                scores.append((score, order))
+        if scores:
+            candidate = max(scores, key=lambda s: s[0])[1]
+
+    if not candidate and not force_list and len(active) == 1:
+        candidate = active[0]
+    if (
+        not candidate
+        and not force_list
+        and ("delivered" in query_text_lc or "arrive" in query_text_lc)
+        and len(fulfilled) == 1
+    ):
+        candidate = fulfilled[0]
+
+    if candidate and not force_list:
+        state.pop("pending_focus_options", None)
+        state.pop("awaiting_focus_selection", None)
+        state.pop("focus_index_map", None)
+        _respond_with_order_detail(state, candidate)
+        return True
+
+    # No single candidate — provide a shortlist
+    sections = _sections_from_context(context)
+    if not sections:
+        sections = [("Active orders:", active)] if active else [("Draft orders:", drafts)]
+    entries, index_map, option_map = _gather_focus_entries(sections)
+    _present_focus_options(state, entries, index_map, option_map)
+    return True
+
+# -----------------------------------------------------------------------------
 # External (WABA) Utility
 # -----------------------------------------------------------------------------
 def upload_media_from_path( file_path: str, mime_type: str = "image/jpeg") -> str:
@@ -218,7 +1075,7 @@ CHIT_CHAT_PROMPT = """
     "Never ask for sensitive personal data unless the user is clearly in a verified credit/KYC flow."
 """
 
-async def handle_chit_chat(state: dict, llm: ChatOpenAI | None = None) -> dict:
+async def handle_chit_chat(state: dict, llm: Optional[ChatOpenAI] = None) -> dict:
     """
     Generate a concise, friendly nudge into the procurement flow
     based on the last two user messages. Updates state with a
@@ -512,25 +1369,71 @@ async def handle_credit(state: AgentState, crud: ProcurementCRUD,  uoc_next_mess
     return state 
 
 async def handle_order_edit(state: AgentState, crud: ProcurementCRUD, latest_response: str, uoc_next_message_extra_data=None) -> AgentState:
-     """
-    Handle the RFQ intent by updating the state and returning it.
-    """
-     material_request_id = state["active_material_request_id"] if "active_material_request_id" in state else None
-     print("Procurement Agent::::: handle_rfq:::::  edit order active_materail_request_id : ", material_request_id)
-     review_order_url = apis.get_review_order_url(os.getenv("REVIEW_ORDER_URL_BASE"), {}, {"senderId" : state.get("sender_id", ""), "uuid": state["active_material_request_id"]})
-     review_order_url_response = """🔎 *Edit your Order Here*"""
+    material_request_id = state.get("active_material_request_id")
+    print("Procurement Agent::::: handle_rfq:::::  edit order active_material_request_id :", material_request_id)
+    review_order_url = apis.get_review_order_url(
+        os.getenv("REVIEW_ORDER_URL_BASE"),
+        {},
+        {"senderId": state.get("sender_id", ""), "uuid": material_request_id},
+    )
+    review_order_url_response = """🔎 *Edit your Order Here*"""
 
-     state.update(
+    state.update(
         intent="rfq",
         latest_respons=review_order_url_response,
         uoc_next_message_type="link_cta",
         uoc_question_type="procurement_new_user_flow",
         needs_clarification=True,
-        uoc_next_message_extra_data= {"display_text": "Review Order", "url": review_order_url},
-        agent_first_run=False  
+        uoc_next_message_extra_data={"display_text": "Review Order", "url": review_order_url},
+        agent_first_run=False,
     )
-     print("Procurement Agent::::: handle_rfq:::::  --Handling rfq intent --", state)
-     return state
+    print("Procurement Agent::::: handle_rfq:::::  --Handling rfq intent --", state)
+    return state
+
+
+async def handle_add_more_photos(state: AgentState, crud: ProcurementCRUD, uoc_next_message_extra_data=None) -> AgentState:
+    if not state.get("bulk_pending_items"):
+        state.update(
+            latest_respons="I don’t have any items saved yet. Could you resend the photo?",
+            uoc_next_message_type="plain",
+            needs_clarification=True,
+        )
+        return state
+
+    _schedule_bulk_auto_finalize(state)
+    state.update(
+        latest_respons="All right — send the next page whenever you're ready.",
+        uoc_next_message_type="plain",
+        needs_clarification=True,
+    )
+    return state
+
+
+async def handle_generate_order(state: AgentState, crud: ProcurementCRUD, uoc_next_message_extra_data=None) -> AgentState:
+    if not state.get("bulk_pending_items"):
+        stored = (state.get("procurement_details") or {}).get("materials") or []
+        if stored:
+            state["bulk_pending_items"] = list(stored)
+        else:
+            state.update(
+                latest_respons="I don’t have any materials yet. Share a photo and I’ll start the order.",
+                uoc_next_message_type="plain",
+                needs_clarification=True,
+            )
+            return state
+
+    state["bulk_auto_locked"] = True
+    summary = await _finalize_bulk_batch(state)
+    if summary is None:
+        state.pop("bulk_auto_locked", None)
+        _schedule_bulk_auto_finalize(state)
+        state.update(
+            latest_respons="Something went wrong while saving that order. Please try again.",
+            uoc_next_message_type="plain",
+            needs_clarification=True,
+        )
+    return state
+
 
 _HANDLER_MAP = {
     "siteops": handle_siteops,
@@ -538,7 +1441,9 @@ _HANDLER_MAP = {
     "main_menu": handle_main_menu,
     "rfq": handle_rfq,
     "credit_use": handle_credit,
-    "edit_order": handle_order_edit
+    "edit_order": handle_order_edit,
+    ADD_MORE_PHOTOS_BUTTON_ID: handle_add_more_photos,
+    GENERATE_ORDER_BUTTON_ID: handle_generate_order,
 }
 
 # -----------------------------------------------------------------------------
@@ -548,6 +1453,7 @@ async def new_user_flow(state: AgentState, crud: ProcurementCRUD  ) -> AgentStat
     intent =state["intent"]
     latest_msg_intent =state.get("intent")
     last_msg = state["messages"][-1]["content"] if state.get("messages") else ""
+    normalized_last = last_msg.strip().lower() if last_msg else ""
     user_name = state.get("user_full_name", "There")
     sender_id = state["sender_id"]
     uoc_next_message_extra_data = state.get("uoc_next_message_extra_data", [])
@@ -565,22 +1471,14 @@ async def new_user_flow(state: AgentState, crud: ProcurementCRUD  ) -> AgentStat
             })
             return state
 
-        # Define notify_user_vendor_confirmed if not imported
-        async def notify_user_vendor_confirmed(user_id: str, request_id: str):
-            # Placeholder: send WhatsApp notification to user about vendor confirmation
-            message = f"✅ Your order {request_id} has been confirmed by the vendor."
-            whatsapp_output(user_id, message, message_type="plain")
-
-        # Define notify_user_vendor_declined if not imported
-        async def notify_user_vendor_declined(user_id: str, request_id: str):
-            # Placeholder: send WhatsApp notification to user about vendor decline
-            message = f"❌ Vendor cannot fulfill your order {request_id}. Please choose another vendor."
-            whatsapp_output(user_id, message, message_type="plain")
-
         try:
             async with AsyncSessionLocal() as session:
                 pcrud = ProcurementCRUD(session)
                 if last_msg == "vendor_confirm":
+                    await pcrud.mark_vendor_confirmation(
+                        request_id=str(req_id),
+                        vendor_id=str(ven_id),
+                    )
                     user_id = await pcrud.get_sender_id_from_request(str(req_id))
                     if user_id:
                         await notify_user_vendor_confirmed(user_id=user_id, request_id=str(req_id))
@@ -612,7 +1510,77 @@ async def new_user_flow(state: AgentState, crud: ProcurementCRUD  ) -> AgentStat
     print("Procurement Agent:::: new_user_flow : the state received here is : -", state)
     response = dict()
     material_request_id = ""
-    
+
+    caption_text = state.get("caption", "")
+    img_path = state.get("image_path")
+
+    if last_msg.startswith("merge_draft_"):
+        request_id = last_msg.split("merge_draft_", 1)[-1]
+        state["image_path"] = None
+        state["bulk_target_request_id"] = request_id
+        return await _process_pending_photo(state, request_id)
+
+    if last_msg == NEW_ORDER_PHOTO_BUTTON_ID:
+        state["image_path"] = None
+        state["bulk_target_request_id"] = None
+        return await _process_pending_photo(state, None)
+
+    if last_msg.startswith("focus_order_"):
+        request_id = last_msg.split("focus_order_", 1)[-1]
+        return await _handle_focus_selection(state, request_id)
+
+    if last_msg == STATUS_NEW_ORDER_BUTTON_ID:
+        state.pop("pending_focus_options", None)
+        state.pop("awaiting_focus_selection", None)
+        state.pop("focus_index_map", None)
+        state.pop("focus_entry_queue", None)
+        state.pop("focus_request_id", None)
+        state.update(
+            latest_respons="Sure—share a photo or describe the materials you need, and I’ll start a new order.",
+            uoc_next_message_type="plain",
+            needs_clarification=True,
+        )
+        return state
+
+    if img_path:
+        _store_pending_photo(state, img_path, caption_text)
+        state["image_path"] = None
+
+        photos = state.pop("batched_photos", None)
+        if not photos:
+            current = state.get("pending_photo")
+            photos = [current] if current else []
+
+        if last_msg == NEW_ORDER_PHOTO_BUTTON_ID:
+            state["bulk_target_request_id"] = None
+            state["awaiting_photo_merge_decision"] = False
+            state["pending_photo_options"] = {}
+            target_request = None
+        elif last_msg.startswith("merge_draft_"):
+            target_request = last_msg.split("merge_draft_", 1)[-1]
+            state["bulk_target_request_id"] = target_request
+            state["awaiting_photo_merge_decision"] = False
+            state["pending_photo_options"] = {}
+        else:
+            recent_drafts = await _fetch_recent_drafts(sender_id)
+            if recent_drafts and not state.get("bulk_mode_active"):
+                message, buttons, option_map = _compose_draft_prompt(recent_drafts)
+                state.update(
+                    latest_respons=message,
+                    uoc_next_message_type="button",
+                    uoc_question_type="procurement_new_user_flow",
+                    uoc_next_message_extra_data={"buttons": buttons},
+                    needs_clarification=True,
+                )
+                state["pending_photo_options"] = option_map
+                state["batched_photos"] = photos
+                state["awaiting_photo_merge_decision"] = True
+                return state
+            target_request = state.get("bulk_target_request_id")
+
+        state["batched_photos"] = photos
+        return await _process_pending_photo(state, target_request)
+
     img_b64 = None
     img_path = state.get("image_path")
     if img_path:
@@ -648,6 +1616,7 @@ async def new_user_flow(state: AgentState, crud: ProcurementCRUD  ) -> AgentStat
             state["user_verified"] = True
             state["uoc_next_message_extra_data"] = [
                 {"id": "procurement_start", "title": "📷 Share Requirement"},
+                {"id": MY_ORDERS_BUTTON_ID, "title": "📋 My Orders"},
                 {"id": "main_menu", "title": "🏠 Main Menu"},
             ]
             return state
@@ -663,11 +1632,7 @@ async def new_user_flow(state: AgentState, crud: ProcurementCRUD  ) -> AgentStat
             print("Procurement Agent:::: new_user_flow : combined text:", combined)
  
             # PREMIUM WAIT FLOW: one instant receipt + one heartbeat if still processing
-            items = await run_with_engagement(
-                sender_id=sender_id,
-                work_coro=extract_materials(combined, img_b64),
-                first_nudge_after=8,  # seconds
-            )
+            items = await extract_materials(combined, img_b64)
          
         state.setdefault("procurement_details", {})["materials"] = items
         print("Procurement Agent:::: new_user_flow : extracted materials:", state["procurement_details"]["materials"])
@@ -683,56 +1648,20 @@ async def new_user_flow(state: AgentState, crud: ProcurementCRUD  ) -> AgentStat
             print("Procurement Agent:::: new_user_flow : Error in persist_procurement:", e)
             state["latest_respons"] = "Sorry, there was an error saving your procurement request. Please try again later."
             return state
-        try:  
-            
-            review_order_url_response = f"""*Your request is ready.*
-
-Please review unclear items before continuing.
-
-_Next, choose an action:_
-            
-            """
-           
-            path = generate_review_order_card(
-                out_dir=str(UPLOAD_IMAGES_DIR),
-                variant="waba_header2x",  # 1600x836 (2x 800x418)
-                brand_name="bab-ai.com Procurement System",
-                brand_pill_text="Procurement",
-                heading="Review Order",
-                site_name="AS Elite, Kakinada",
-                order_id="MR-08A972B5",
-                items_count_text="3 materials",
-                delivery_text="Fri, 22 Aug",
-                quotes_text="3 in (best ₹—)",
-                payment_text="Credit available",
-                items=items,
-                total_value="₹ 3,45,600",
-                total_subnote="incl. GST • freight extra",
-                quotes_ready_count=3,
+        try:
+            await _prepare_review_response(
+                state,
+                state.get("active_material_request_id"),
+                items,
             )
-
-            media_id = upload_media_from_path( path, "image/jpeg")
-
-            state.update({  
-                "latest_respons": review_order_url_response,
-                "uoc_next_message_type": "button",
-                "uoc_question_type": "procurement_new_user_flow",
-                #"uoc_next_message_extra_data": {"display_text": "Review Order", "url": review_order_url},
-                "uoc_next_message_extra_data": {"buttons":  [
-                     {"id": "edit_order", "title": "Edit Order"},
-                    {"id": "rfq", "title": "Confirm & Get Quotes"},
-                    {"id": "credit_use", "title": "Buy with Credit"},
-                ],
-                "media_id": media_id,
-                "media_type": "image",
-                },
-                "needs_clarification": True,
-                "active_material_request_id": state["active_material_request_id"],
-                "agent_first_run": False,
-            })
         except Exception as e:
-            print("Procurement Agent:::: new_user_flow : Error in fetching review order:", e)
-        
+            print("Procurement Agent:::: new_user_flow : Error preparing review response:", e)
+            state.update(
+                latest_respons="Your request is ready. Please tap the link to review it.",
+                uoc_next_message_type="plain",
+                needs_clarification=True,
+                agent_first_run=False,
+            )
         return state
     else:
         print("Procurement Agent:::: new_user_flow : agent first run is false, not setting it to false")
@@ -753,7 +1682,7 @@ _Next, choose an action:_
         
         ###########################################    
         latest_msg_intent= state["intent"]
-        latest_msg_context = state["intent_context"]
+        latest_msg_context = state.get("intent_context", {})
 
         if latest_msg_intent == "random":
                     from agents.random_agent import classify_and_respond
@@ -1115,8 +2044,13 @@ async def run_procurement_agent(state: dict,  config: dict) -> dict:
     user_stage = state.get("user_stage", {})
     print("Procurement Agent:::: run_procurement_agent : user_stage:", user_stage)
 
+    normalized_last = last_msg.strip().lower() if isinstance(last_msg, str) else ""
       
     intent_context = state.get("intent_context","")
+    if state.get("focus_index_map"):
+         choice = _parse_focus_selection(last_msg, state["focus_index_map"])
+         if choice:
+             return await _handle_focus_selection(state, choice)
     if intent_context.lower() == "chit-chat":
          print("Procurement Agent:::: run_procurement_agent : The user is trying to chit-chat")
          state = await handle_chit_chat(state)
@@ -1127,6 +2061,40 @@ async def run_procurement_agent(state: dict,  config: dict) -> dict:
          state = await handle_help(state)
          state["intent_context"]="" #clear context after consuming it 
          return state
+
+    if intent_context.lower() in {"order_followup", "track_order"}:
+         handled = await _handle_order_status_query(state, last_msg)
+         if handled:
+             state["intent_context"] = ""
+             return state
+
+    if normalized_last in {MY_ORDERS_BUTTON_ID, "my orders", "orders", "my order"}:
+         handled = await _handle_order_status_query(state, MY_ORDERS_BUTTON_ID)
+         if handled:
+             state["intent_context"] = ""
+             return state
+    if last_msg == FOCUS_MORE_BUTTON_ID:
+         queue = state.get("focus_entry_queue") or []
+         option_map = state.get("pending_focus_options") or {}
+         index_map = state.get("focus_index_map") or {}
+         if queue:
+             _present_focus_options(state, queue, index_map, option_map)
+             return state
+         handled = await _handle_order_status_query(state, MY_ORDERS_BUTTON_ID)
+         if handled:
+             state["intent_context"] = ""
+             return state
+    if state.get("focus_request_id") and _looks_like_followup(last_msg):
+         handled = await _handle_order_status_query(state, last_msg)
+         if handled:
+             return state
+    if last_msg.isdigit() and state.get("order_context_cache"):
+         sections = _sections_from_context(state["order_context_cache"])
+         entries, index_map, option_map = _gather_focus_entries(sections)
+         choice = _parse_focus_selection(last_msg, index_map)
+         if choice:
+             state["pending_focus_options"] = option_map
+             return await _handle_focus_selection(state, choice)
         # ---------- 0 · Button click (id) ---------------------------
     if last_msg.lower() in _HANDLER_MAP:
         return await _HANDLER_MAP[last_msg.lower()](state,  config, state.get("uoc_next_message_extra_data", []))

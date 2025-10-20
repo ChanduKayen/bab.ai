@@ -1,36 +1,233 @@
 
 import asyncio
+from datetime import datetime, timezone
 from decimal import Decimal
+from enum import Enum as PyEnum
+from typing import Any, Dict, List, Optional, Set
+from uuid import UUID, UUID as _UUID, uuid4
+
+from pydantic import BaseModel
+from sqlalchemy import delete, func, literal_column, or_, update
+from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.future import select
+from sqlalchemy.orm import joinedload
+
 from database.models import (
     MaterialRequest,
     MaterialRequestItem,
     Project,
     QuoteRequestVendor,
+    QuoteRequestVendorStatus,
     QuoteResponse,
+    QuoteStatus,
+    RequestStatus,
     SkuMaster,
     SkuVendorPrice,
+    Vendor,
+    VendorQuoteItem as VendorQuoteItemDB,
+    VendorFollowupNudge,
 )
-from database.models import VendorQuoteItem as VendorQuoteItemDB, RequestStatus, Vendor
-from database.models import MaterialRequest, MaterialRequestItem
-from database.models import QuoteStatus
-from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.future import select
-from sqlalchemy import func, literal_column, or_, update, delete
-from sqlalchemy.exc import SQLAlchemyError
-from sqlalchemy.orm import joinedload
-from datetime import datetime
-from typing import Any, Dict, List, Optional, Set
-from uuid import uuid4, UUID as _UUID
-from sqlalchemy.dialects.postgresql import insert as pg_insert
-# from whatsapp.apis import VendorQuoteItem as VendorQuoteItemPayload
-from pydantic import BaseModel
-from uuid import UUID
-from typing import Optional, List
 from database.sku_crud import SkuCRUD
+from managers.vendor_followup import compute_next_due
 
 class ProcurementCRUD:
     def __init__(self, session: AsyncSession):
         self.session = session
+
+    @staticmethod
+    def _now_iso(when: Optional[datetime] = None) -> str:
+        dt = (when or datetime.utcnow()).replace(tzinfo=timezone.utc)
+        return dt.isoformat()
+
+    def _merge_status_history(self, history: Optional[Dict[str, Any]], status: Any, *, when: Optional[datetime] = None) -> Dict[str, Any]:
+        if isinstance(status, PyEnum):
+            key = status.value
+        else:
+            key = str(status)
+        updated = dict(history or {})
+        updated[key] = self._now_iso(when)
+        return updated
+
+    async def _schedule_vendor_followups(
+        self,
+        request_id: _UUID,
+        vendor_ids: Set[_UUID],
+        invited_at: datetime,
+    ) -> None:
+        if not vendor_ids:
+            return
+        first_due = compute_next_due(invited_at, 0)
+        if first_due is None:
+            return
+        payload = [
+            {
+                "quote_request_id": request_id,
+                "vendor_id": ven_id,
+                "invited_at": invited_at,
+                "next_nudge_at": first_due,
+                "last_nudged_at": None,
+                "nudge_stage": 0,
+                "updated_at": invited_at,
+            }
+            for ven_id in vendor_ids
+        ]
+        stmt = pg_insert(VendorFollowupNudge).values(payload)
+        stmt = stmt.on_conflict_do_update(
+            index_elements=[VendorFollowupNudge.quote_request_id, VendorFollowupNudge.vendor_id],
+            set_={
+                "invited_at": invited_at,
+                "next_nudge_at": first_due,
+                "nudge_stage": 0,
+                "last_nudged_at": None,
+                "updated_at": invited_at,
+            },
+        )
+        await self.session.execute(stmt)
+
+    async def _clear_vendor_followup(
+        self,
+        request_id: _UUID,
+        vendor_id: _UUID,
+    ) -> None:
+        await self.session.execute(
+            delete(VendorFollowupNudge).where(
+                VendorFollowupNudge.quote_request_id == request_id,
+                VendorFollowupNudge.vendor_id == vendor_id,
+            )
+        )
+
+    @staticmethod
+    def _coerce_request_status(value: Any, default: RequestStatus) -> RequestStatus:
+        if isinstance(value, RequestStatus):
+            return value
+        if isinstance(value, str):
+            try:
+                return RequestStatus(value.upper())
+            except ValueError:
+                return default
+        return default
+
+    @staticmethod
+    def _coerce_quote_status(value: Any, default: QuoteStatus) -> QuoteStatus:
+        if isinstance(value, QuoteStatus):
+            return value
+        if isinstance(value, str):
+            try:
+                return QuoteStatus(value.upper())
+            except ValueError:
+                return default
+        return default
+
+    @staticmethod
+    def _coerce_vendor_status(value: Any, default: QuoteRequestVendorStatus) -> QuoteRequestVendorStatus:
+        if isinstance(value, QuoteRequestVendorStatus):
+            return value
+        if isinstance(value, str):
+            try:
+                return QuoteRequestVendorStatus(value.upper())
+            except ValueError:
+                return default
+        return default
+
+    async def _set_request_status(
+        self,
+        request_id: _UUID,
+        status: RequestStatus,
+        *,
+        extra_values: Optional[Dict[str, Any]] = None,
+        when: Optional[datetime] = None,
+    ) -> None:
+        result = await self.session.execute(
+            select(MaterialRequest.status_history).where(MaterialRequest.id == request_id)
+        )
+        history = result.scalar_one_or_none() or {}
+        merged = self._merge_status_history(history, status, when=when)
+        values = {"status_history": merged, "status": status}
+        if extra_values:
+            values.update(extra_values)
+        await self.session.execute(
+            update(MaterialRequest).where(MaterialRequest.id == request_id).values(**values)
+        )
+
+    async def _set_request_items_status(
+        self,
+        request_id: _UUID,
+        status: RequestStatus,
+        *,
+        when: Optional[datetime] = None,
+    ) -> None:
+        result = await self.session.execute(
+            select(MaterialRequestItem.id, MaterialRequestItem.status_history)
+            .where(MaterialRequestItem.material_request_id == request_id)
+        )
+        rows = result.all()
+        for item_id, history in rows:
+            merged = self._merge_status_history(history or {}, status, when=when)
+            await self.session.execute(
+                update(MaterialRequestItem)
+                .where(MaterialRequestItem.id == item_id)
+                .values(status_history=merged, status=status)
+            )
+
+    async def _set_quote_request_vendor_status(
+        self,
+        request_id: _UUID,
+        vendor_id: _UUID,
+        status: QuoteRequestVendorStatus,
+        *,
+        when: Optional[datetime] = None,
+    ) -> None:
+        result = await self.session.execute(
+            select(QuoteRequestVendor.status_history)
+            .where(
+                QuoteRequestVendor.quote_request_id == request_id,
+                QuoteRequestVendor.vendor_id == vendor_id,
+            )
+        )
+        history = result.scalar_one_or_none() or {}
+        merged = self._merge_status_history(history, status, when=when)
+        await self.session.execute(
+            update(QuoteRequestVendor)
+            .where(
+                QuoteRequestVendor.quote_request_id == request_id,
+                QuoteRequestVendor.vendor_id == vendor_id,
+            )
+            .values(status_history=merged, status=status)
+        )
+        if status not in (
+            QuoteRequestVendorStatus.INVITED,
+            QuoteRequestVendorStatus.NOTIFIED,
+        ):
+            await self._clear_vendor_followup(request_id, vendor_id)
+
+    async def _set_vendor_quote_item_status(
+        self,
+        request_id: _UUID,
+        vendor_id: _UUID,
+        status: QuoteStatus,
+        *,
+        when: Optional[datetime] = None,
+        exclude_vendor: Optional[_UUID] = None,
+    ) -> None:
+        stmt = select(
+            VendorQuoteItemDB.id,
+            VendorQuoteItemDB.status_history,
+        ).where(VendorQuoteItemDB.quote_request_id == request_id)
+        if exclude_vendor is not None:
+            stmt = stmt.where(VendorQuoteItemDB.vendor_id != exclude_vendor)
+        else:
+            stmt = stmt.where(VendorQuoteItemDB.vendor_id == vendor_id)
+
+        rows = (await self.session.execute(stmt)).all()
+        for quote_id, history in rows:
+            merged = self._merge_status_history(history or {}, status, when=when)
+            await self.session.execute(
+                update(VendorQuoteItemDB)
+                .where(VendorQuoteItemDB.id == quote_id)
+                .values(status_history=merged, status=status)
+            )
 
     async def save_procurement_request(
         self,
@@ -47,11 +244,13 @@ class ProcurementCRUD:
         items: list = None
     ):
         try:
+            status_enum = self._coerce_request_status(status, RequestStatus.DRAFT)
             request = MaterialRequest(
                 id=request_id,
                 project_id=project_id,
                 sender_id=sender_id,
-                status=status,
+                status_history=self._merge_status_history({}, status_enum, when=created_at),
+                status=status_enum,
                 delivery_location=delivery_location,
                 notes=notes,
                 created_at=created_at,
@@ -62,6 +261,7 @@ class ProcurementCRUD:
 
             print("procurement_crud.py :::: save_procurement_request :::: material request : ", request)
             for item in items or []:
+                item_status = self._coerce_request_status(item.get("status"), RequestStatus.DRAFT)
                 request_item = MaterialRequestItem(
                     material_request_id=request_id,
                     material_name=item["material_name"],
@@ -71,7 +271,8 @@ class ProcurementCRUD:
                     quantity=item["quantity"],
                     quantity_units=item.get("quantity_units"),
                     unit_price=item.get("unit_price"),
-                    status=item.get("status"),
+                    status_history=self._merge_status_history({}, item_status, when=created_at),
+                    status=item_status,
                     vendor_notes=item.get("vendor_notes")
                 )
                 request.items.append(request_item)
@@ -100,11 +301,19 @@ class ProcurementCRUD:
     ):
         try:
             print("procurement_crud ::::: update_procurement_request ::::: request_id : ", request_id)
+            result = await self.session.execute(
+                select(MaterialRequest.status_history).where(MaterialRequest.id == request_id)
+            )
+            current_history = result.scalar_one_or_none() or {}
+            status_enum = self._coerce_request_status(status, RequestStatus.REQUESTED)
+            merged_history = self._merge_status_history(current_history, status_enum)
+
             await self.session.execute(
                 update(MaterialRequest)
                 .where(MaterialRequest.id == request_id)
                 .values(
-                    status=status,
+                    status_history=merged_history,
+                    status=status_enum,
                     project_id=project_id,
                     delivery_location=delivery_location,
                     notes=notes,
@@ -142,10 +351,17 @@ class ProcurementCRUD:
                     existing_item.quantity = upd["quantity"]
                     existing_item.quantity_units = upd.get("quantity_units")
                     existing_item.unit_price = upd.get("unit_price")
-                    existing_item.status = upd.get("status")
+                    status_enum = self._coerce_request_status(
+                        upd.get("status"), existing_item.status or RequestStatus.DRAFT
+                    )
+                    existing_item.status_history = self._merge_status_history(
+                        existing_item.status_history, status_enum
+                    )
+                    existing_item.status = status_enum
                     existing_item.vendor_notes = upd.get("vendor_notes")
                 else:
                     # New item to insert
+                    status_enum = self._coerce_request_status(upd.get("status"), RequestStatus.DRAFT)
                     new_item = MaterialRequestItem(
                         material_request_id=request_id,
                         material_name=upd["material_name"],
@@ -155,7 +371,8 @@ class ProcurementCRUD:
                         quantity=upd["quantity"],
                         quantity_units=upd.get("quantity_units"),
                         unit_price=upd.get("unit_price"),
-                        status=upd.get("status"),
+                        status_history=self._merge_status_history({}, status_enum),
+                        status=status_enum,
                         vendor_notes=upd.get("vendor_notes")
                     )
                     self.session.add(new_item)
@@ -217,9 +434,10 @@ class ProcurementCRUD:
                     row_id = uuid4()  # generate for truly new rows
 
                 print(f"procurement_crud ::::: payload status {src.get('status')}")
-                status_val = src.get("status")
+                raw_status = src.get("status")
                 if default_status is not None:
-                    status_val = default_status
+                    raw_status = default_status
+                status_enum = self._coerce_request_status(raw_status, RequestStatus.DRAFT)
 
                 rows.append({
                     "id": row_id,
@@ -231,7 +449,8 @@ class ProcurementCRUD:
                     "quantity": src.get("quantity"),
                     "quantity_units": src.get("quantity_units"),
                     "unit_price": src.get("unit_price"),
-                    "status": status_val,
+                    "status_history": self._merge_status_history({}, status_enum),
+                    "status": status_enum,
                     "vendor_notes": src.get("vendor_notes"),
                 })
                 payload_ids.append(row_id)
@@ -273,6 +492,10 @@ class ProcurementCRUD:
                             "quantity":        excluded.quantity,
                             "quantity_units":  excluded.quantity_units,
                             "unit_price":      excluded.unit_price,
+                            "status_history":  func.merge_status_history(
+                                MaterialRequestItem.status_history,
+                                excluded.status_history,
+                            ),
                             "status":          excluded.status,
                             "vendor_notes":    excluded.vendor_notes,
                             "material_request_id": excluded.material_request_id,  # stays same by WHERE
@@ -310,9 +533,17 @@ class ProcurementCRUD:
                 return
 
             req_uuid = _UUID(str(request_id))
+            invited_at = datetime.utcnow()
             print(f"procurement_crud ::::: add_quote_request_vendors ::::: unique vendor ids : {unique_ids}")
             values = [
-                {"quote_request_id": req_uuid, "vendor_id": ven_id}
+                {
+                    "quote_request_id": req_uuid,
+                    "vendor_id": ven_id,
+                    "status_history": self._merge_status_history(
+                        {}, QuoteRequestVendorStatus.INVITED
+                    ),
+                    "status": QuoteRequestVendorStatus.INVITED,
+                }
                 for ven_id in unique_ids
             ]
 
@@ -320,6 +551,7 @@ class ProcurementCRUD:
             stmt = stmt.on_conflict_do_nothing()
             print(f"procurement_crud ::::: add_quote_request_vendors ::::: inserting vendors : {values}")
             await self.session.execute(stmt)
+            await self._schedule_vendor_followups(req_uuid, unique_ids, invited_at)
             await self.session.commit()
             print(f"procurement_crud ::::: add_quote_request_vendors ::::: inserted count : {len(values)}")
         except Exception as e:
@@ -440,6 +672,7 @@ class ProcurementCRUD:
             try:
                 price_unit = item.price_units or "unit"
 
+                new_history = self._merge_status_history({}, QuoteStatus.QUOTED, when=now)
                 stmt = (
                     pg_insert(VendorQuoteItemDB)
                     .values(
@@ -450,6 +683,8 @@ class ProcurementCRUD:
                         price_unit=price_unit,
                         delivery_days=item.delivery_days,
                         comments=item.comments,
+                        status_history=new_history,
+                        status=QuoteStatus.QUOTED,
                         created_at=now,
                         updated_at=now,
                     )
@@ -460,6 +695,11 @@ class ProcurementCRUD:
                             "price_unit": price_unit,
                             "delivery_days": item.delivery_days,
                             "comments": item.comments,
+                            "status_history": func.merge_status_history(
+                                VendorQuoteItemDB.status_history,
+                                new_history,
+                            ),
+                            "status": QuoteStatus.QUOTED,
                             "updated_at": now,
                         },
                     )
@@ -486,6 +726,12 @@ class ProcurementCRUD:
                 if isinstance(result, Exception):
                     print(f"procurement_crud ::::: insert_vendor_quotes ::::: matching task raised exception : {result}")
 
+        await self._set_quote_request_vendor_status(
+            req_uuid,
+            ven_uuid,
+            QuoteRequestVendorStatus.RESPONDED,
+            when=now,
+        )
         await self.session.commit()
         return had_existing
     
@@ -568,46 +814,62 @@ class ProcurementCRUD:
 
             now = datetime.utcnow()
 
-            # 1) Update request header
-            await self.session.execute(
-                update(MaterialRequest)
-                .where(MaterialRequest.id == req_uuid)
-                .values(
-                    status=RequestStatus.APPROVED,
-                    expected_delivery_date=expected_delivery_date,
-                    notes=notes,
-                    updated_at=now,
-                    user_editable=False,
-                )
-            )
-            
-
-            # 2) Update items to APPROVED
-            await self.session.execute(
-                update(MaterialRequestItem)
-                .where(MaterialRequestItem.material_request_id == req_uuid)
-                .values(status=RequestStatus.APPROVED)
+            await self._set_request_status(
+                req_uuid,
+                RequestStatus.APPROVED,
+                when=now,
+                extra_values={
+                    "approved_vendor": ven_uuid,
+                    "expected_delivery_date": expected_delivery_date,
+                    "notes": notes,
+                    "updated_at": now,
+                    "user_editable": False,
+                },
             )
 
-            # 3) Update vendor quotes statuses
-            #    Approved vendor
-            await self.session.execute(
-                update(VendorQuoteItemDB)
-                .where(
-                    VendorQuoteItemDB.quote_request_id == req_uuid,
-                    VendorQuoteItemDB.vendor_id == ven_uuid,
-                )
-                .values(status=QuoteStatus.APPROVED)
+            await self._set_request_items_status(
+                req_uuid,
+                RequestStatus.APPROVED,
+                when=now,
             )
-            #    Others => REJECTED (internally; UI may show "Not selected")
-            await self.session.execute(
-                update(VendorQuoteItemDB)
-                .where(
-                    VendorQuoteItemDB.quote_request_id == req_uuid,
-                    VendorQuoteItemDB.vendor_id != ven_uuid,
-                )
-                .values(status=QuoteStatus.REJECTED)
+
+            await self._set_vendor_quote_item_status(
+                req_uuid,
+                ven_uuid,
+                QuoteStatus.APPROVED,
+                when=now,
             )
+            await self._set_vendor_quote_item_status(
+                req_uuid,
+                ven_uuid,
+                QuoteStatus.REJECTED,
+                when=now,
+                exclude_vendor=ven_uuid,
+            )
+
+            await self._set_quote_request_vendor_status(
+                req_uuid,
+                ven_uuid,
+                QuoteRequestVendorStatus.APPROVED,
+                when=now,
+            )
+
+            other_vendor_ids = (
+                await self.session.execute(
+                    select(QuoteRequestVendor.vendor_id)
+                    .where(
+                        QuoteRequestVendor.quote_request_id == req_uuid,
+                        QuoteRequestVendor.vendor_id != ven_uuid,
+                    )
+                )
+            ).scalars().all()
+            for other_vendor in other_vendor_ids:
+                await self._set_quote_request_vendor_status(
+                    req_uuid,
+                    other_vendor,
+                    QuoteRequestVendorStatus.REJECTED,
+                    when=now,
+                )
 
             # Fetch summary rows for total computation
             q = (
@@ -694,28 +956,43 @@ class ProcurementCRUD:
 
             now = datetime.utcnow()
 
-            # 1) Mark this vendor's quotes as REJECTED
+            await self._set_vendor_quote_item_status(
+                req_uuid,
+                ven_uuid,
+                QuoteStatus.REJECTED,
+                when=now,
+            )
             await self.session.execute(
                 update(VendorQuoteItemDB)
                 .where(
                     VendorQuoteItemDB.quote_request_id == req_uuid,
                     VendorQuoteItemDB.vendor_id == ven_uuid,
                 )
-                .values(status=QuoteStatus.REJECTED, comments="Declined by vendor")
+                .values(comments="Declined by vendor")
             )
 
-            # 2) Reopen request
-            await self.session.execute(
-                update(MaterialRequest)
-                .where(MaterialRequest.id == req_uuid)
-                .values(status=RequestStatus.QUOTED, updated_at=now, user_editable=False)
+            await self._set_request_status(
+                req_uuid,
+                RequestStatus.QUOTED,
+                when=now,
+                extra_values={
+                    "updated_at": now,
+                    "user_editable": False,
+                    "approved_vendor": None,
+                    "delivered_at": None,
+                },
             )
 
-            # 3) Reopen items
-            await self.session.execute(
-                update(MaterialRequestItem)
-                .where(MaterialRequestItem.material_request_id == req_uuid)
-                .values(status=RequestStatus.QUOTED)
+            await self._set_request_items_status(
+                req_uuid,
+                RequestStatus.QUOTED,
+                when=now,
+            )
+            await self._set_quote_request_vendor_status(
+                req_uuid,
+                ven_uuid,
+                QuoteRequestVendorStatus.DECLINED,
+                when=now,
             )
 
             await self.session.commit()
@@ -723,5 +1000,33 @@ class ProcurementCRUD:
             await self.session.rollback()
             print("procurement_crud ::::: vendor_decline_and_reopen ::::: exception :", e)
             raise
- 
 
+    async def mark_vendor_confirmation(self, request_id: _UUID, vendor_id: _UUID) -> None:
+        """
+        Capture vendor confirmation by setting delivered_at and reinforcing invite status.
+        Only updates when the confirming vendor matches the approved vendor.
+        """
+        try:
+            req_uuid = _UUID(str(request_id))
+            ven_uuid = _UUID(str(vendor_id))
+            now = datetime.utcnow()
+
+            await self.session.execute(
+                update(MaterialRequest)
+                .where(
+                    MaterialRequest.id == req_uuid,
+                    MaterialRequest.approved_vendor == ven_uuid,
+                )
+                .values(delivered_at=now, updated_at=now)
+            )
+            await self._set_quote_request_vendor_status(
+                req_uuid,
+                ven_uuid,
+                QuoteRequestVendorStatus.APPROVED,
+                when=now,
+            )
+            await self.session.commit()
+        except Exception as e:
+            await self.session.rollback()
+            print("procurement_crud ::::: mark_vendor_confirmation ::::: exception :", e)
+            raise

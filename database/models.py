@@ -1,8 +1,8 @@
 # db/models.py
 from datetime import datetime, date
 from sqlalchemy import (
-    ARRAY, Boolean, Column, String, Text, Integer, BigInteger, ForeignKey, Date, 
-    Index, Enum, JSON, text, DateTime, UniqueConstraint, Float, Numeric, CheckConstraint)
+    ARRAY, Boolean, Column, String, Text, Integer, BigInteger, ForeignKey, Date,
+    Index, Enum, JSON, text, DateTime, UniqueConstraint, Float, Numeric, CheckConstraint, DDL, event)
 from sqlalchemy.orm import DeclarativeBase, Mapped, relationship, declarative_base, mapped_column
 from sqlalchemy.dialects.postgresql import UUID, JSONB, TSVECTOR
 from sqlalchemy.schema import MetaData
@@ -11,6 +11,39 @@ import uuid
 from sqlalchemy.sql import func
 from sqlalchemy import TIMESTAMP
 from app.db import Base
+
+
+LATEST_STATUS_FN = DDL(
+    """
+    CREATE OR REPLACE FUNCTION latest_status(history jsonb)
+    RETURNS text
+    LANGUAGE sql
+    IMMUTABLE
+    AS $$
+        SELECT key
+        FROM jsonb_each_text(COALESCE(history, '{}'::jsonb))
+        ORDER BY NULLIF(value, '') DESC NULLS LAST, key DESC
+        LIMIT 1;
+    $$;
+    """
+)
+
+
+MERGE_STATUS_HISTORY_FN = DDL(
+    """
+    CREATE OR REPLACE FUNCTION merge_status_history(original jsonb, incoming jsonb)
+    RETURNS jsonb
+    LANGUAGE sql
+    IMMUTABLE
+    AS $$
+        SELECT COALESCE(original, '{}'::jsonb) || COALESCE(incoming, '{}'::jsonb);
+    $$;
+    """
+)
+
+
+event.listen(Base.metadata, "before_create", LATEST_STATUS_FN.execute_if(dialect="postgresql"))
+event.listen(Base.metadata, "before_create", MERGE_STATUS_HISTORY_FN.execute_if(dialect="postgresql"))
 
 # class Base(DeclarativeBase):
 #     metadata = MetaData(schema="public")
@@ -174,26 +207,44 @@ class MaterialLog(Base):
     material = relationship("Material", backref="material_logs")
 
 class RequestStatus(PyEnum):
-    DRAFT = "draft"
-    REQUESTED = "requested"
-    QUOTED = "quoted"
-    APPROVED = "approved" 
+    DRAFT = "DRAFT"
+    REQUESTED = "REQUESTED"
+    QUOTED = "QUOTED"
+    APPROVED = "APPROVED"
+
+
+REQUEST_STATUS_ENUM = Enum(
+    RequestStatus,
+    name="requeststatus",
+    metadata=Base.metadata,
+)
 
 class MaterialRequest(Base):
     __tablename__ = "material_requests"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id", ondelete="SET NULL"), nullable=True)
-    
+
     sender_id = Column(String, nullable=False)  # WhatsApp user ID
-    status = Column(Enum(RequestStatus), default=RequestStatus.DRAFT, nullable=False)  # draft / requested / quoted / approved
+    status_history = Column(JSONB, nullable=False, server_default=text("'{}'::jsonb"))
+    status = Column(
+        REQUEST_STATUS_ENUM,
+        default=RequestStatus.DRAFT,
+        nullable=False,
+    )  # draft / requested / quoted / approved
     delivery_location = Column(String, nullable=True)
     notes = Column(Text)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     expected_delivery_date = Column(Date, nullable=True)
     user_editable = Column(Boolean, default=True)
-    
+    approved_vendor = Column(
+        UUID(as_uuid=True),
+        ForeignKey("vendors.vendor_id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    delivered_at = Column(DateTime, nullable=True)
+
     items = relationship(
         "MaterialRequestItem",
         back_populates="request",
@@ -220,7 +271,12 @@ class MaterialRequestItem(Base):
     quantity = Column(Float, nullable=False)
     quantity_units = Column(String, nullable=True)  # e.g., units, bags
     unit_price = Column(Float, nullable=True)  # till vendor give a quote
-    status = Column(Enum(RequestStatus), default=RequestStatus.DRAFT, nullable=False)  # draft / requested / quoted / approved
+    status_history = Column(JSONB, nullable=False, server_default=text("'{}'::jsonb"))
+    status = Column(
+        REQUEST_STATUS_ENUM,
+        default=RequestStatus.DRAFT,
+        nullable=False,
+    )  # draft / requested / quoted / approved
     vendor_notes = Column(Text, nullable=True)
      
     request = relationship("MaterialRequest", back_populates="items")
@@ -323,11 +379,42 @@ class User(Base):
     
     credit_profile = relationship("CreditProfile", back_populates="user", uselist=False)
     __table_args__ = (UniqueConstraint('sender_id', name='uq_user_sender_id'),)
-class QuoteRequestVendor(Base):
-        __tablename__ = "quote_request_vendors"
 
-        quote_request_id = Column(UUID(as_uuid=True), ForeignKey("material_requests.id", ondelete="CASCADE"), primary_key=True)
-        vendor_id = Column(UUID(as_uuid=True), ForeignKey("vendors.vendor_id", ondelete="CASCADE"), primary_key=True)
+class QuoteRequestVendorStatus(PyEnum):
+    INVITED = "INVITED"
+    NOTIFIED = "NOTIFIED"
+    RESPONDED = "RESPONDED"
+    DECLINED = "DECLINED"
+    APPROVED = "APPROVED"
+    REJECTED = "REJECTED"
+
+
+QUOTE_REQUEST_VENDOR_STATUS_ENUM = Enum(
+    QuoteRequestVendorStatus,
+    name="quote_request_vendor_status",
+    metadata=Base.metadata,
+)
+
+
+class QuoteRequestVendor(Base):
+    __tablename__ = "quote_request_vendors"
+
+    quote_request_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("material_requests.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    vendor_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("vendors.vendor_id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    status_history = Column(JSONB, nullable=False, server_default=text("'{}'::jsonb"))
+    status = Column(
+        QUOTE_REQUEST_VENDOR_STATUS_ENUM,
+        default=QuoteRequestVendorStatus.INVITED,
+        nullable=False,
+    )
 
 class QuoteResponse(Base):
         __tablename__ = "quote_responses"
@@ -344,10 +431,17 @@ class QuoteResponse(Base):
         vendor = relationship("Vendor")
 
 class QuoteStatus(PyEnum):
-    PENDING = "pending"
-    QUOTED = "quoted"
-    APPROVED = "approved"
-    REJECTED = "rejected"
+    PENDING = "PENDING"
+    QUOTED = "QUOTED"
+    APPROVED = "APPROVED"
+    REJECTED = "REJECTED"
+
+
+QUOTE_STATUS_ENUM = Enum(
+    QuoteStatus,
+    name="quotestatus",
+    metadata=Base.metadata,
+)
 class VendorQuoteItem(Base):
     __tablename__ = "vendor_quote_items"
 
@@ -362,9 +456,14 @@ class VendorQuoteItem(Base):
     quoted_price  = Column(Float, nullable=False)     # numeric value
     price_unit    = Column(String, nullable=False)    # e.g., "bag", "kg", "ton", "piece"
     delivery_days = Column(Integer, nullable=True)    # e.g., 7 days
-    delivery_date = Column(Date, nullable=True)      # alternative exact date
+    delivery_date = Column(Date, nullable=True)       # alternative exact date
     comments      = Column(Text, nullable=True)       # vendor's comments or notes
-    status        = Column(Enum(QuoteStatus), default=QuoteStatus.QUOTED, nullable=False)  # quoted / approved
+    status_history = Column(JSONB, nullable=False, server_default=text("'{}'::jsonb"))
+    status        = Column(
+        QUOTE_STATUS_ENUM,
+        default=QuoteStatus.QUOTED,
+        nullable=False,
+    )  # quoted / approved
 
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
@@ -377,6 +476,25 @@ class VendorQuoteItem(Base):
     request      = relationship("MaterialRequest", back_populates="vendor_quote_items")
     request_item = relationship("MaterialRequestItem", back_populates="vendor_quote_items")
     vendor       = relationship("Vendor", back_populates="vendor_quote_items")
+
+class VendorFollowupNudge(Base):
+    __tablename__ = "vendor_followup_nudges"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    quote_request_id = Column(UUID(as_uuid=True), ForeignKey("material_requests.id", ondelete="CASCADE"), nullable=False)
+    vendor_id = Column(UUID(as_uuid=True), ForeignKey("vendors.vendor_id", ondelete="CASCADE"), nullable=False)
+    invited_at = Column(DateTime(timezone=True), nullable=False)
+    next_nudge_at = Column(DateTime(timezone=True), nullable=False)
+    last_nudged_at = Column(DateTime(timezone=True), nullable=True)
+    nudge_stage = Column(Integer, nullable=False, default=0)
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
+
+    __table_args__ = (
+        UniqueConstraint("quote_request_id", "vendor_id", name="uq_followup_request_vendor"),
+        Index("idx_followup_next_due", "next_nudge_at"),
+        Index("idx_followup_request_vendor", "quote_request_id", "vendor_id"),
+    )
 
 
 # -------------------------------------------------------------------------
@@ -557,4 +675,3 @@ class SkuAlias(Base):
         Index("idx_sku_alias_master", "master_sku_id"),
         Index("idx_sku_alias_text", "alias_text"),
     )
-
