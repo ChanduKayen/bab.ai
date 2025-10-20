@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Request, Depends, Request
-from agents import procurement_agent
+from agents import procurement_agent, vendor_agent
 from orchastrator.core import builder_graph 
 import sys 
 from fastapi.responses import PlainTextResponse
@@ -795,6 +795,13 @@ async def handle_whatsapp_event(data: dict):
                 except Exception as e:
                     print("Webhook :::::: whatsapp_webhook::::: Error calling credit_agent.handle_credit_status_check:", e)
                     import traceback; traceback.print_exc()
+            elif q_type == "vendor_new_user_flow":
+                print("Webhook :::::: whatsapp_webhook::::: <needs_clarification True>::::: <uoc_question_type>::::: -- The set question type is vendor_new_user_flow, so calling ??vendor_agent.run_vendor_agent?? --", state["uoc_question_type"])
+                try:
+                    followups_state = await vendor_agent.run_vendor_agent(state, config={"configurable": {"crud": crud}})
+                except Exception as e:
+                    print("Webhook :::::: whatsapp_webhook::::: Error calling vendor_agent.run_vendor_agent:", e)
+                    import traceback; traceback.print_exc()
             else:
                 raise ValueError(f"Unknown uoc_question_type: {state['uoc_question_type']}")
 
@@ -830,11 +837,16 @@ async def handle_whatsapp_event(data: dict):
             print("Calling builder_graph with user category is:", state.get("user_category"))
             if  state.get("user_category") == "VENDOR":
                 print("Calling vendor_agent directly")
-                result = {
-                    "latest_respons": "Hello Vendor! How can I assist you today?",
-                    "uoc_next_message_type": "plain",
-                    "uoc_next_message_extra_data": None
-                }
+                # result = {
+                #     "latest_respons": "Hello Vendor! How can I assist you today?",
+                #     "uoc_next_message_type": "plain",
+                #     "uoc_next_message_extra_data": None
+                # }
+                async with AsyncSessionLocal() as session:
+                    crud = DatabaseCRUD(session)
+                    result = await vendor_agent.run_vendor_agent(state, config={"crud": crud})
+                    
+                
             elif state.get("user_category") == "BUILDER" or state.get("user_category") == "USER" or state.get("user_category") is None:
             #whatsapp_output(sender_id, random.choice(FIRST_TIME_MESSAGES), message_type="plain")
                 state["user_full_name"] = user_name  # Update the user's full name in the state

@@ -253,7 +253,7 @@ async def handle_chit_chat(state: dict, llm: ChatOpenAI | None = None) -> dict:
     state["needs_clarification"] = True
     state["last_known_intent"] = "procurement"  # keep lane sticky
     state["uoc_next_message_extra_data"] = [
-        {"id": "rfq", "title": "📷 Share Requirement"},
+        {"id": "guided_photo_upload", "title": "📷 Share Requirement"},
        # {"id": "credit_use", "title": "⚡ Buy with Credit"},
     ]
    
@@ -519,6 +519,10 @@ async def handle_order_edit(state: AgentState, crud: ProcurementCRUD, latest_res
      review_order_url = apis.get_review_order_url(os.getenv("REVIEW_ORDER_URL_BASE"), {}, {"senderId" : state.get("sender_id", ""), "uuid": state["active_material_request_id"]})
      review_order_url_response = """🧾 *Review & Checkout*
 
+*Your request is ready for review*
+
+Now you may edit your list, and proceed to get quotations from trusted vendors.
+
 _You’ll be taken to a secure Thirtee page - review your order, compare manufacturers, and request quotations effortlessly._
      """
 
@@ -541,9 +545,9 @@ async def handle_photo_upload_flow(state: AgentState, crud: ProcurementCRUD, uoc
         state.update(
             intent="procurement",
             latest_respons=(
-                f"Great! Please share a photo or BOQ of your requirement.\n"
-                "A site photo, bill, or handwritten list works fine."
-            ),
+                f"Great! Please share your requirement here.\n"
+                "📷 A photo of material list, handwritten notes, or even your voice note works perfect."
+            ), 
             uoc_next_message_type="plain",
             uoc_question_type="procurement_new_user_flow",
             uoc_next_message_extra_data=[],
@@ -565,6 +569,31 @@ async def handle_photo_upload_flow(state: AgentState, crud: ProcurementCRUD, uoc
         last_known_intent="procurement"
     )
     return state
+
+
+async def handle_followup_on_quotes(state: AgentState, crud: ProcurementCRUD) -> AgentState:
+     """
+    Handle the RFQ intent by updating the state and returning it.
+    """
+     material_request_id = state["active_material_request_id"] if "active_material_request_id" in state else None
+     print("Procurement Agent::::: handle_rfq:::::  edit order active_material_request_id : ", material_request_id)
+     review_order_url = "https://www.thirtee.in"  # Placeholder URL
+     review_order_url_response = """🧾 *Your Quotations dashboard*
+
+_You will be taken to your dashboard where you can review all your quotations:_
+     """
+
+     state.update(
+        intent="rfq",
+        latest_respons=review_order_url_response,
+        uoc_next_message_type="link_cta",
+        uoc_question_type="procurement_new_user_flow",
+        needs_clarification=True,
+        uoc_next_message_extra_data= {"display_text": "Proceed Securely", "url": review_order_url},
+        agent_first_run=False
+    )
+     print("Procurement Agent::::: handle_rfq:::::  --Handling rfq intent --", state)
+     return state
 
 _HANDLER_MAP = {
     "siteops": handle_siteops,
@@ -718,13 +747,14 @@ async def new_user_flow(state: AgentState, crud: ProcurementCRUD  ) -> AgentStat
             print("Procurement Agent:::: new_user_flow : Error in persist_procurement:", e)
             state["latest_respons"] = "Sorry, there was an error saving your procurement request. Please try again later."
             return state
+        
         try:  
 
             review_order_url_response = f"""*Your request is ready for review*
 
 *Summary:* Requested {len(items)} materials.
 
-Please review any unclear details before moving ahead.
+Now you may edit your list, and proceed to get quotations from trusted vendors.
 
 
             """
@@ -748,26 +778,29 @@ Please review any unclear details before moving ahead.
             # )
 
             # media_id = upload_media_from_path( path, "image/jpeg")
+            await handle_order_edit(state, crud, latest_response="", uoc_next_message_extra_data=None)
 
-            state.update({  
-                "latest_respons": review_order_url_response,
-                "uoc_next_message_type": "button",
-                "uoc_question_type": "procurement_new_user_flow",
-                #"uoc_next_message_extra_data": {"display_text": "Review Order", "url": review_order_url},
-                "uoc_next_message_extra_data": {"buttons":  [
-                     {"id": "edit_order", "title": "Review & Confirm →"},
-                     {"id": "help", "title": "What is this? 🤔"},
-                    #{"id": "rfq", "title": "Confirm & Get Quotes"},
-                    #{"id": "credit_use", "title": "Buy with Credit"},
-                ]
-                #,
-                #"media_id": media_id,   --Temporarily disabling content media
-                #"media_type": "image",
-                },
-                "needs_clarification": True,
-                "active_material_request_id": state["active_material_request_id"],
-                "agent_first_run": False,
-            })
+            #Skipping this below step to directly provide the edit link
+
+        #     state.update({
+        #         "latest_respons": review_order_url_response,
+        #         "uoc_next_message_type": "button",
+        #         "uoc_question_type": "procurement_new_user_flow",
+        #         #"uoc_next_message_extra_data": {"display_text": "Review Order", "url": review_order_url},
+        #         "uoc_next_message_extra_data": {"buttons":  [
+        #              {"id": "edit_order", "title": "Review & Confirm →"},
+        #              {"id": "help", "title": "What is this? 🤔"},
+        #             #{"id": "rfq", "title": "Confirm & Get Quotes"},
+        #             #{"id": "credit_use", "title": "Buy with Credit"},
+        #         ]
+        #         #,
+        #         #"media_id": media_id,   --Temporarily disabling content media
+        #         #"media_type": "image",
+        #         },
+        #         "needs_clarification": True,
+        #         "active_material_request_id": state["active_material_request_id"],
+        #         "agent_first_run": False,
+        #     })
         except Exception as e:
             print("Procurement Agent:::: new_user_flow : Error in fetching review order:", e)
         
@@ -1006,11 +1039,11 @@ async def run_procurement_agent(state: dict,  config: dict) -> dict:
          state = await new_user_flow(state, crud)
          state["intent_context"]="" #clear context after consuming it 
          return state
-    # if intent_context.lower() == "quote_followup":
-    #      print("Procurement Agent:::: run_procurement_agent : The user is trying to follow up on quote requests")
-    #      state = await followup_on_quotes(state, crud, [])
-    #      state["intent_context"]="" #clear context after consuming it 
-    #      return state
+    if intent_context.lower() == "quote_followup" or intent_context.lower() == "status":
+         print("Procurement Agent:::: run_procurement_agent : The user is trying to follow up on quote requests")
+         state = await handle_followup_on_quotes(state, crud)
+         state["intent_context"]="" #clear context after consuming it 
+         return state
         # ---------- 0 · Button click (id) ---------------------------
     if last_msg.lower() in _HANDLER_MAP:
         return await _HANDLER_MAP[last_msg.lower()](state,  config, state.get("uoc_next_message_extra_data", []))
@@ -1029,12 +1062,13 @@ async def run_procurement_agent(state: dict,  config: dict) -> dict:
         state["uoc_next_message_type"] = "button"
         state["uoc_question_type"] = "procurement_new_user_flow"
         if state["user_category"] == "builder":
-            state["latest_respons"] = """👋 *Welcome to Thirtee!* — where builders connect directly with manufacturers and distributors. 
-            
-            You’re now set up as a *Builder*. Let’s get your first requirement rolling.
+            state["latest_respons"] = """👋 *Welcome to Thirtee, Builder!*  
+Here I help builders like you connect with manufacturers effortlessly, instantly, and right at your fingertips.
+
+You’re now set up as a *Builder*. Let’s get your first requirement rolling.
             """
             state["uoc_next_message_extra_data"] = [
-                {"id": "rfq", "title": "📷 Share Requirement"}
+                {"id": "guided_photo_upload", "title": "📷 Share Requirement"}
             ]
             state["needs_clarification"] = True
             
@@ -1051,17 +1085,17 @@ async def run_procurement_agent(state: dict,  config: dict) -> dict:
         print("Procurement Agent:::: run_procurement_agent : User category not set")
         message = """👋 *Hola!* I am Thirtee, your smart assistant for construction procurement and credit.
 
-Are you a *Builder* looking for materials or a *Supplier* supplying them?
+Before we proceed would you let me know if you are a *Builder* looking for materials or a *Supplier* supplying them?
 
-_This is a one-time question. It helps personalise your experience_"""
- 
+_This information helps me personalise your experience_"""
+
         state["latest_respons"] = message
         state["uoc_next_message_type"] = "button"
         state["uoc_question_type"] = "procurement_new_user_flow"
         state["needs_clarification"] = True
         state["uoc_next_message_extra_data"] = [
-            {"id": "builder_user", "title": "👷‍♂️ Builder"},
-            {"id": "vendor_user", "title": "🏭 Supplier"},
+            {"id": "builder_user", "title": "👷‍♂️ I'm a Builder"},
+            {"id": "vendor_user", "title": "🏭 I'm a Supplier"},
         ]
         # whatsapp_output(state.get("sender_id", ""), message, message_type="button",extra_data= [
         #     {"id": "builder_user", "title": "👷‍♂️ Builder"},

@@ -259,7 +259,21 @@ async def handle_procurement(state: AgentState, latest_response: str, config: di
         state["messages"][-1]["content"] = ""
     state.update(
         intent="procurement",
-        latest_respons=latest_response,
+        latest_response=latest_response,
+        uoc_next_message_type="button",
+        uoc_question_type="procurement",
+        needs_clarification=True,
+        uoc_next_message_extra_data=[uoc_next_message_extra_data] if uoc_next_message_extra_data else [{"id":"procurement","title":"📷 Share Requirement"}],
+        agent_first_run=True
+    )
+    return await run_procurement_agent(state, config)
+async def handle_rfq(state: AgentState, latest_response: str, config: dict,
+                             uoc_next_message_extra_data: Optional[Dict[str, str]]=None) -> AgentState:
+    if state.get("messages"):
+        state["messages"][-1]["content"] = "guided_photo_upload"
+    state.update(
+        intent="procurement",
+        latest_response=latest_response,
         uoc_next_message_type="button",
         uoc_question_type="procurement",
         needs_clarification=True,
@@ -310,6 +324,7 @@ _HANDLER_MAP = {
     "procurement": handle_procurement,
     "credit": handle_credit,
     "main_menu": handle_main_menu,
+    "rfq": handle_rfq,
 }
  
 # ------------------------------------------------------------------
@@ -443,9 +458,10 @@ async def classify_and_respond(state: AgentState, config: Optional[Dict[str, Any
         if state["user_category"] == "builder":
             image_path = "C:/Users/koppi/OneDrive/Desktop/Thirtee/Marketing/builder_welcome.png"
             media_id = upload_media_from_path( image_path, "image/jpeg")
-            state["latest_respons"] = """👋 *Welcome to Thirtee, Builder!* — where I help builders like you connect with manufacturers — effortlessly, instantly, and right at your fingertips.
+            state["latest_respons"] = """👋 *Welcome to Thirtee, Builder!*  
+Here I help builders like you connect with manufacturers effortlessly, instantly, and right at your fingertips.
 
-            You’re now set up as a *Builder*. Let’s get your first requirement rolling.
+You’re now set up as a *Builder*. Let’s get your first requirement rolling.
             """
             state["uoc_next_message_extra_data"] = {"buttons":  [
                      {"id": "rfq", "title": "📷 Share Requirement"}
@@ -478,17 +494,17 @@ async def classify_and_respond(state: AgentState, config: Optional[Dict[str, Any
         print("Random Agent::: Classify and respond  : User category not set")
         message = """👋 *Hola!* I am Thirtee, your smart assistant for construction procurement and credit.
 
-Are you a *Builder* looking for materials or a *Supplier* supplying them?
+Before we proceed would you let me know if you are a *Builder* looking for materials or a *Supplier* supplying them?
 
-_This is a one-time question. It helps personalise your experience_"""
+_This information helps me personalise your experience_"""
 
         state["latest_respons"] = message
         state["uoc_next_message_type"] = "button"
         state["uoc_question_type"] = "onboarding"
         state["needs_clarification"] = True
         state["uoc_next_message_extra_data"] = [
-            {"id": "builder_user", "title": "👷‍♂️ Builder"},
-            {"id": "vendor_user", "title": "🏭 Supplier"},
+            {"id": "builder_user", "title": "👷‍♂️ I'm a Builder"},
+            {"id": "vendor_user", "title": "🏭 I'm a Supplier"},
         ]
         # whatsapp_output(state.get("sender_id", ""), message, message_type="button",extra_data= [
         #     {"id": "builder_user", "title": "👷‍♂️ Builder"},
