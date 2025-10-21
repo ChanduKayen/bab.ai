@@ -21,8 +21,8 @@ DEFAULT_SIM_THRESHOLD = 0.12
 SEARCH_SQL = text("""
     WITH params AS (
         SELECT
-            CASE WHEN :q_norm = '' THEN NULL::tsquery
-                 ELSE websearch_to_tsquery('simple', unaccent(:q_norm))
+          CASE WHEN :q_norm = '' THEN NULL::tsquery
+              ELSE websearch_to_tsquery('simple', :q_norm)
             END AS tsq,
             CAST(:dim1 AS numeric) AS dim1,
             CAST(:dim2 AS numeric) AS dim2,
