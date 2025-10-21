@@ -1,8 +1,10 @@
 """Utilities for notifying supervisors and vendors about quote status."""
 
 import os
+import json
 from typing import Dict, List, Optional
 from dotenv import load_dotenv
+from urllib.parse import quote
 
 from whatsapp.builder_out import whatsapp_output
 
@@ -28,12 +30,16 @@ def _quote_summary_url(request_id: str) -> Optional[str]:
 
 def _vendor_quote_url(request_id: str, vendor_id: str) -> str:
     base = VENDOR_QUOTE_URL_BASE or "https://example.com/vendor/quotes"
-    return f"{base}?uuid={request_id}&vendorId={vendor_id}"
+    data = {"uuid": request_id, "vendor_id": vendor_id}
+    encoded_data = quote(json.dumps(data))
+    return f"{base}?data={encoded_data}"
 
 
 def _vendor_order_url(request_id: str, vendor_id: str) -> str:
     base = VENDOR_ORDER_CONFIRMATION_URL_BASE or "https://example.com/vendor/order"
-    return f"{base}?uuid={request_id}&vendor_id={vendor_id}"
+    data = {"uuid": request_id, "vendor_id": vendor_id}
+    encoded_data = quote(json.dumps(data))
+    return f"{base}?data={encoded_data}"
 
 
 async def send_quote_request_to_vendor(

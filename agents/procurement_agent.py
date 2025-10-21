@@ -21,6 +21,7 @@ from database.uoc_crud import DatabaseCRUD
 from dotenv import load_dotenv
 import json  # Import the json module
 import re
+from urllib.parse import quote
 #from app.db import SessionLocal
 
 from app.db import get_sessionmaker
@@ -1339,8 +1340,15 @@ async def handle_rfq(state: AgentState, crud: ProcurementCRUD, latest_response: 
     """
     print("Procurement Agent::::: handle_rfq:::::  state recieved --", state)
     material_request_id = state["active_material_request_id"] if "active_material_request_id" in state else None
-    review_order_url = apis.get_review_order_url(os.getenv("REVIEW_ORDER_URL_BASE"), {}, {"senderId" : state.get("sender_id", ""), "uuid": state["active_material_request_id"]})
-    review_order_url_response = """*Choose Vendors and proceed to palce order*"""
+
+    base = os.getenv("REVIEW_ORDER_URL_BASE")
+    data = {
+        "sender_id" : state.get("sender_id", ""),
+        "uuid": state["active_material_request_id"]
+    }
+    encoded_data = quote(json.dumps(data))
+    review_order_url = f"{base}?data={encoded_data}"
+    review_order_url_response = """*Choose Vendors and proceed to place order*"""
 
     state.update(
         intent="rfq",
@@ -1369,14 +1377,21 @@ async def handle_credit(state: AgentState, crud: ProcurementCRUD,  uoc_next_mess
     return state 
 
 async def handle_order_edit(state: AgentState, crud: ProcurementCRUD, latest_response: str, uoc_next_message_extra_data=None) -> AgentState:
+    """
+    Handle the RFQ edit-order intent by updating the state and returning it.
+    """
     material_request_id = state.get("active_material_request_id")
-    print("Procurement Agent::::: handle_rfq:::::  edit order active_material_request_id :", material_request_id)
-    review_order_url = apis.get_review_order_url(
-        os.getenv("REVIEW_ORDER_URL_BASE"),
-        {},
-        {"senderId": state.get("sender_id", ""), "uuid": material_request_id},
-    )
-    review_order_url_response = """🔎 *Edit your Order Here*"""
+    print("Procurement Agent::::: handle_order_edit:::::  edit order active_material_request_id : ", material_request_id)
+
+    base = os.getenv("REVIEW_ORDER_URL_BASE")
+    data = {
+        "sender_id": state.get("sender_id", ""),
+        "uuid": state.get("active_material_request_id")
+    }
+    encoded_data = quote(json.dumps(data))
+    review_order_url = f"{base}?data={encoded_data}"
+
+    review_order_url_response = "🔎 *Edit your Order Here*"
 
     state.update(
         intent="rfq",
@@ -1385,55 +1400,10 @@ async def handle_order_edit(state: AgentState, crud: ProcurementCRUD, latest_res
         uoc_question_type="procurement_new_user_flow",
         needs_clarification=True,
         uoc_next_message_extra_data={"display_text": "Review Order", "url": review_order_url},
-        agent_first_run=False,
+        agent_first_run=False
     )
-    print("Procurement Agent::::: handle_rfq:::::  --Handling rfq intent --", state)
+    print("Procurement Agent::::: handle_order_edit:::::  --Handling order edit intent --")
     return state
-
-
-async def handle_add_more_photos(state: AgentState, crud: ProcurementCRUD, uoc_next_message_extra_data=None) -> AgentState:
-    if not state.get("bulk_pending_items"):
-        state.update(
-            latest_respons="I don’t have any items saved yet. Could you resend the photo?",
-            uoc_next_message_type="plain",
-            needs_clarification=True,
-        )
-        return state
-
-    _schedule_bulk_auto_finalize(state)
-    state.update(
-        latest_respons="All right — send the next page whenever you're ready.",
-        uoc_next_message_type="plain",
-        needs_clarification=True,
-    )
-    return state
-
-
-async def handle_generate_order(state: AgentState, crud: ProcurementCRUD, uoc_next_message_extra_data=None) -> AgentState:
-    if not state.get("bulk_pending_items"):
-        stored = (state.get("procurement_details") or {}).get("materials") or []
-        if stored:
-            state["bulk_pending_items"] = list(stored)
-        else:
-            state.update(
-                latest_respons="I don’t have any materials yet. Share a photo and I’ll start the order.",
-                uoc_next_message_type="plain",
-                needs_clarification=True,
-            )
-            return state
-
-    state["bulk_auto_locked"] = True
-    summary = await _finalize_bulk_batch(state)
-    if summary is None:
-        state.pop("bulk_auto_locked", None)
-        _schedule_bulk_auto_finalize(state)
-        state.update(
-            latest_respons="Something went wrong while saving that order. Please try again.",
-            uoc_next_message_type="plain",
-            needs_clarification=True,
-        )
-    return state
-
 
 _HANDLER_MAP = {
     "siteops": handle_siteops,
