@@ -183,6 +183,7 @@ CONVERSATION_SYSTEM_PROMPT = (
     "Explain Thirtee ’s abilities in a helpful, human tone — never like a sales pitch. "
     "Keep every response warm, context-aware, and conversational. "
     "If the topic is off-track, gently bring the user back by reminding how Thirtee  can assist with procurement or credit. "
+    "If the user asks for material quotes, pricing, or vendor info, or anything related to construction procurement, choose the intent \"procurement\". else choose \"random\". "
     "Never ask for sensitive personal data unless the user is clearly in a verified credit/KYC flow."
 )
 
@@ -191,6 +192,7 @@ CONVERSATION_JSON_PROMPT = (
     "Return ONLY a JSON object with this schema and nothing else:\n"
     "{\n"
     "  \"message\": \"<concise reply per constraints>\",\n"
+    "  \"intent\": \"<procurement|random>\",\n"
     "  \"cta\": { \n"
     "    \"id\": \"<siteops|procurement|credit>\",\n"
     "    \"title\": \"<≤20 chars, can include emoji>\"\n"
@@ -259,9 +261,9 @@ async def handle_procurement(state: AgentState, latest_response: str, config: di
         state["messages"][-1]["content"] = ""
     state.update(
         intent="procurement",
-        latest_response=latest_response,
+        latest_respons=latest_response,
         uoc_next_message_type="button",
-        uoc_question_type="procurement",
+        uoc_question_type="procurement_new_user_flow",
         needs_clarification=True,
         uoc_next_message_extra_data=[uoc_next_message_extra_data] if uoc_next_message_extra_data else [{"id":"procurement","title":"📷 Share Requirement"}],
         agent_first_run=True
@@ -275,7 +277,7 @@ async def handle_rfq(state: AgentState, latest_response: str, config: dict,
         intent="procurement",
         latest_response=latest_response,
         uoc_next_message_type="button",
-        uoc_question_type="procurement",
+        uoc_question_type="procurement_new_user_flow",
         needs_clarification=True,
         uoc_next_message_extra_data=[uoc_next_message_extra_data] if uoc_next_message_extra_data else [{"id":"procurement","title":"📷 Share Requirement"}],
         agent_first_run=True
@@ -392,6 +394,7 @@ async def generate_conversational_reply_with_cta(state: AgentState) -> Dict[str,
     data = strict_json(res.content) or {}
     message = (data.get("message") or "").strip()
     print("Random agent::: Generate_conversational_reply_with_cta LLM  message:::: ", repr(message))
+    llm_intent = (data.get("intent") or "").strip().lower()
     cta = data.get("cta") or {}
     cta_id = str(cta.get("id") or "").strip().lower()
     if cta_id not in {"siteops","procurement","credit"}: 
@@ -407,7 +410,7 @@ async def generate_conversational_reply_with_cta(state: AgentState) -> Dict[str,
     default_title = DEFAULT_CTA[cta_id]["title"]
     title = cta.get("title") or default_title
     title = _cap_len(title, 20)
-    return {"message": message, "cta": {"id": cta_id, "title": title}}
+    return {"message": message, "cta": {"id": cta_id, "title": title}, "intent": llm_intent}
 
 def _first_name(full: str) -> str:
     s = (full or "there").strip()
@@ -545,11 +548,19 @@ _This information helps me personalise your experience_"""
 
             try:
                 convo = await generate_conversational_reply_with_cta(state) or {}
+                print("Random Agent::: Classify and respond ::: LLM convo ::: ---------------- ", convo)
                 msg = convo.get("message", "").strip()
                 cta = convo.get("cta") or {}
                 cta_id = (cta.get("id") or "").strip().lower()
                 cta_title = (cta.get("title") or "").strip()
-
+                intent = convo.get("intent", "random").strip().lower()
+                print("Random Agent::: Classify and respond ::: LLM intent ::: ---------------- ", intent)
+                if intent == "procurement" :
+                    print("Random Agent::: Classify and respond ::: Routing to Procurement Agent ")
+                    state["agent_first_run"] = True
+                    return await run_procurement_agent(state, config)
+                
+                
                 # Fallbacks if LLM didn't return a valid CTA
                 if cta_id not in {"siteops", "procurement", "credit"}:
                     cta_choice = _quick_cta_from_text(_last_user_text(state), state)

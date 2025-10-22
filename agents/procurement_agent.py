@@ -714,6 +714,7 @@ async def new_user_flow(state: AgentState, crud: ProcurementCRUD  ) -> AgentStat
                 {"id": "guided_photo_upload", "title": "📷 Share Requirement"},
                 {"id": "main_menu", "title": "🏠 Main Menu"},
             ]
+            print("Procurement Agent:::: new_user_flow : welcome message set up completed", state)
             return state
              
         else:
