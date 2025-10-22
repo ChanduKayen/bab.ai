@@ -328,7 +328,7 @@ _HANDLER_MAP = {
     "main_menu": handle_main_menu,
     "rfq": handle_rfq,
 }
- 
+
 # ------------------------------------------------------------------
 # Utilities
 # ------------------------------------------------------------------
@@ -349,7 +349,7 @@ def _one_emoji(msg: str) -> str:
 def _cap_len(msg: str, limit: int = 120) -> str:
     return msg if len(msg) <= limit else msg[:limit-1] + "…"
 
- 
+
 def _last_user_text(state: AgentState) -> str: 
     if not state.get("messages"):
         return "" 

@@ -347,7 +347,6 @@ class Vendor(Base):
         cascade="all, delete-orphan",
         passive_deletes=True,
     )
-    
 class UserCategory(PyEnum):
     USER = "USER"
     SUPERVISOR = "SUPERVISOR"
