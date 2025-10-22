@@ -11,7 +11,7 @@ router = APIRouter()
 from app.logging_config import logger
 import requests
 from pathlib import Path
-
+from whatsapp.builder_out import mark_read, send_typing_indicator_meta
 # Load environment variables
 load_dotenv()
 APP_SECRET = os.getenv("APP_SECRET", None)
@@ -393,13 +393,20 @@ async def handle_whatsapp_event(data: dict):
             logger.info("No messages found in the entry.")
             return {"status": "ignored", "reason": "No messages found"}
         msg = entry["messages"][0]
-        
-        
-        print("Webhook :::::: whatsapp_webhook::::: Received message:", msg)
+        inbound_wamid = msg.get("id")
         sender_id = msg["from"]
         msg_type = msg["type"]
         contacts = entry.get("contacts", [])
         user_name = None
+        print("Webhook :::::: whatsapp_webhook::::: -- inbound_wamid to mark read --", inbound_wamid)
+        #mark_read(inbound_wamid)
+        #send_typing_indicator(sender_id, inbound_wamid, duration=1.5)
+
+        send_typing_indicator_meta(inbound_wamid)
+        print("Webhook :::::: whatsapp_webhook::::: Received message:", msg)
+        
+        
+        
 
         if contacts and isinstance(contacts[0], dict):
             profile = contacts[0].get("profile", {})
@@ -424,6 +431,7 @@ async def handle_whatsapp_event(data: dict):
                 "uoc": {}, 
                 "user_full_name": user_name,    
                 "user_stage": "new",    
+                "inbound_wamid": inbound_wamid
             }
         else:
             state["user_full_name"] = user_name
@@ -871,6 +879,7 @@ async def handle_whatsapp_event(data: dict):
         extra_data= result.get("uoc_next_message_extra_data", None)
         print("Webhook :::::: whatsapp_webhook:::::-- ******Sending message to whatsapp****** Attributes :", message_type, extra_data)
         try:
+           
             whatsapp_output(sender_id, response_msg, message_type=message_type, extra_data=extra_data)
             logger.info("Final response sent to WhatsApp")
         except Exception as send_err:
@@ -879,7 +888,7 @@ async def handle_whatsapp_event(data: dict):
     
        
     except Exception as e:
-        logger.error("Error in WhatsApp webhook:{e}")
+        logger.error(f"Error in WhatsApp webhook: {e}")
         #logger.error(e, exc_info=True)
         return {"status": "error", "message": str(e)}
 
@@ -935,6 +944,6 @@ async def whatsapp_webhook(
 
 async def _safe_handle_whatsapp_event(payload: dict):
     try:
-        await handle_whatsapp_event(payload)  # <-- your async worker
+        await handle_whatsapp_event(payload)  
     except Exception:
         logging.exception("handle_whatsapp_event failed")

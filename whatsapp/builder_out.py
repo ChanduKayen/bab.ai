@@ -72,8 +72,9 @@ USAGE PATTERNS (state → whatsapp_output):
 """
 
 load_dotenv(override=True)
-WHATSAPP_API_URL = "https://graph.facebook.com/v19.0/712076848650669/messages"
-#ACCESS_TOKEN = "EAAIMZBw8BqsgBO4ZAdqhSNYjSuupWb2dw5btXJ6zyLUGwOUE5s5okrJnL4o4m89b14KQyZCjZBZAN3yZBCRanqLC82m59bGe4Rd2BPfRe3A3pvGFZCTf2xB7a6insIzesPDVMLIw4gwlMkkz7NGl3ZBLvP5MU8i3mZBMmUBShGeQkSlAyRhsXJtlsg8uGaAfYwTid8PZAGBKnbOR3LFpCgBD8ZCIMJh9xI0sHWy"
+PHONE_NUMBER_ID = os.getenv("PHONE_NUMBER_ID")
+WHATSAPP_API_URL = f"https://graph.facebook.com/v19.0/{PHONE_NUMBER_ID}/messages"
+#ACCESS_TOKEN = "EAAIMZBw8BqsgBO4ZAdqhSNYjSuupWb2dw5btXJ6zyLUGwOUE5s5okrJnL4o4m89b14KQyZCjZBZAN3yZBCRanqLC82m59bGe4Rd2BPfRe3A3pvGFZCTf2xB7a6insIzesPDVMLIw4gwlMkkz7NGl3ZBLvP5MU8i3mZBMmUBShGeQkSlAyRhsXJtlsg8uGaAfYwTid8PZAGBKnbOR3LFpCgBD8ZCIMJh9xI0sHWy"  
 
 ACCESS_TOKEN = os.getenv("WHATSAPP_ACCESS_TOKEN")
 WABA_HEADER_TEXT_LIMIT = 60
@@ -170,11 +171,61 @@ def whatsapp_output(
         send_list_message(to_number, message_text, extra_data=extra_data)
     elif message_type == "link_cta":
         send_link_cta_message(to_number, message_text, extra_data=extra_data)
+    elif message_type == "template":
+        send_template_message(to_number, extra_data)
+    # extra_data must contain: template_name, language_code, and params
+    
     else:
         raise ValueError(f"Unknown message_type: {message_type}")
 
 
 # ---------- Message Senders ----------
+
+
+def send_template_message(to_number: str, extra_data: Dict[str, Any]):
+    """
+    extra_data must include:
+      - template_name: str
+      - language_code: str (e.g., "en")
+      - body_params: List[str]   # ordered for {{1}}..{{N}}
+    Optional (for dynamic URL button):
+      - button_param: str        # text appended to the base URL set in template
+      - button_index: int        # default 0 if first button
+    """
+    headers = _get_headers()
+
+    name = extra_data["template_name"]
+    lang = extra_data.get("language_code", "en")
+    body_params = extra_data.get("body_params", [])
+
+    components = []
+    if body_params:
+        components.append({
+            "type": "body",
+            "parameters": [{"type": "text", "text": str(p)} for p in body_params]
+        })
+
+    if "button_param" in extra_data and extra_data["button_param"] is not None:
+        components.append({
+            "type": "button",
+            "sub_type": "url",
+            "index": str(extra_data.get("button_index", 0)),
+            "parameters": [{"type": "text", "text": str(extra_data["button_param"])}]
+        })
+
+    payload = {
+        "messaging_product": "whatsapp",
+        "to": to_number,
+        "type": "template",
+        "template": {
+            "name": name,
+            "language": {"code": lang},
+            "components": components
+        }
+    }
+    _post_message(headers, payload)
+
+
 def send_plain_message(
     to_number: str,
     message_text: str,
@@ -346,26 +397,7 @@ def send_link_cta_message(
     _post_message(headers, payload)
 
 
-# ---------- Typing Indicator ----------
-def send_typing_indicator(to_number: str, duration: int = 3):
-    """
-    Sends a typing indicator briefly, then pauses.
-    """
-    headers = _get_headers()
-    payload = {
-        "messaging_product": "whatsapp",
-        "to": to_number,
-        "type": "typing",
-        "typing": {"status": "typing"}
-    }
-    print(f"💬 Sending typing indicator to {to_number} for {duration}s...")
-    resp = requests.post(WHATSAPP_API_URL, headers=headers, json=payload)
-    print(f"📥 Typing indicator response: {resp.status_code} {resp.text}")
 
-    if duration > 0:
-        time.sleep(duration)
-        payload["typing"]["status"] = "paused"
-        requests.post(WHATSAPP_API_URL, headers=headers, json=payload)
 
 
 # ---------- Internal Helpers ----------
@@ -374,7 +406,50 @@ def _get_headers() -> Dict[str, str]:
         "Authorization": f"Bearer {ACCESS_TOKEN}",
         "Content-Type": "application/json"
     }
+def mark_read(inbound_wamid: str):
+    """
+    Mark the incoming WhatsApp message as 'read' (recommended UX).
+    Safe to call only when you have a valid inbound message_id (wamid).
+    """
+    print(f"💬 Marking message {inbound_wamid} as read...")
+    headers = _get_headers()
+    payload = {
+        "messaging_product": "whatsapp",
+        "status": "read",
+        "message_id": inbound_wamid
+    }
+    resp = requests.post(WHATSAPP_API_URL, headers=headers, json=payload, timeout=10)
+    print(f"📥 Mark read response: {resp.status_code} {resp.text}")
 
+def send_typing_indicator_meta(to_message_id: str):
+    """
+    Sends an official 'typing indicator' + 'read' status to WhatsApp Cloud API.
+    Requires Graph API v21.0+.
+    """
+    PHONE_NUMBER_ID = os.getenv("PHONE_NUMBER_ID")
+    ACCESS_TOKEN = os.getenv("WHATSAPP_ACCESS_TOKEN")
+
+    url = f"https://graph.facebook.com/v21.0/{PHONE_NUMBER_ID}/messages"
+    headers = {
+        "Authorization": f"Bearer {ACCESS_TOKEN}",
+        "Content-Type": "application/json",
+    }
+
+    payload = {
+        "messaging_product": "whatsapp",
+        "status": "read",  # marks the inbound message as read
+        "message_id": to_message_id,
+        "typing_indicator": {
+            "type": "text"  # tells Meta to display "typing…" for text reply
+        },
+    }
+
+    print(f"💬 Sending typing indicator for message_id={to_message_id}...")
+    response = requests.post(url, headers=headers, json=payload, timeout=10)
+    print(f"📥 Response: {response.status_code} {response.text}")
+
+    if not (200 <= response.status_code < 300):
+        raise Exception(f"Failed to send typing indicator: {response.status_code} {response.text}")
 
 def _post_message(headers: Dict[str, str], payload: Dict[str, Any]):
     print("📤 Sending payload to WhatsApp:")

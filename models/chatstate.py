@@ -2,6 +2,7 @@ from typing import TypedDict, List, Optional
 
  
 class AgentState(TypedDict):
+    inbound_wamid: Optional[str]
     user_full_name: Optional[str]
     user_stage: Optional[str] 
     user_category: Optional[str]

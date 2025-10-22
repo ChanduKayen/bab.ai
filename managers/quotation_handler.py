@@ -35,6 +35,13 @@ def _vendor_order_url(request_id: str, vendor_id: str) -> str:
     base = VENDOR_ORDER_CONFIRMATION_URL_BASE or "https://example.com/vendor/order"
     return f"{base}?uuid={request_id}&vendor_id={vendor_id}"
 
+def _vendor_quote_button_param(request_id: str, vendor_id: str) -> str:
+    """URL-encode the JSON payload for the template’s dynamic URL button."""
+    import json
+    from urllib.parse import quote
+    data = {"uuid": request_id, "vendor_id": vendor_id}
+    # compact JSON to keep URL short
+    return quote(json.dumps(data, separators=(",", ":")))
 
 async def send_quote_request_to_vendor(
     vendor_id: str,
@@ -44,18 +51,67 @@ async def send_quote_request_to_vendor(
     project_name: Optional[str] = None,
     project_location: Optional[str] = None,
     item_count: Optional[int] = None,
+
+    # (recommended so your template gets rich, correct values)
+    vendor_display_name: Optional[str] = None,   # for {{1}}
+    builder_name: Optional[str] = None,          # for {{2}}
+    company_name: Optional[str] = None           # for {{3}}
 ) -> None:
-    """Send an initial quote request message to a vendor."""
+    """Send an initial quote request to a vendor via WhatsApp Template (Utility)."""
     if not contact_number:
-        print(
-            "quotation_handler ::::: send_quote_request_to_vendor ::::: missing contact for vendor",
-            vendor_id,
-        )
+        print("quotation_handler ::::: send_quote_request_to_vendor ::::: missing contact for vendor", vendor_id)
         return
 
+    # --- Compose body params for the approved template ---
+    # Template body:
+    # Hi Mr. {{1}},
+    # *{{2}}* garu has requested a quotation from you. He sent this message from Thirtee platform.
+    #
+    # Here are the request details:
+    # • *Company*: {{3}}
+    # • *Project*: {{4}}
+    # • *Delivery location*: {{5}}
+    #
+    # Button: dynamic URL → https://www.thirtee.in/orders/send-quote?data={{1}}   (this {{1}} is button param)
+
+    # Safe fallbacks (kept neutral to preserve Utility/non-promotional tone)
+    v_name = vendor_display_name or "Vendor"
+    b_name = builder_name or (company_name or "Builder")
+    c_name = company_name or b_name
+    proj   = project_name or "Project"
+    loc    = project_location or "Location"
+
+    # Build the dynamic button param (URL-encoded JSON)
+    encoded = _vendor_quote_button_param(request_id, vendor_id)
+
+    # Try template first; fall back to link_cta if anything goes wrong
+    try:
+        whatsapp_output(
+            to_number=contact_number,
+            message_text="",  # not used for template
+            message_type="template",
+            extra_data={
+                "template_name": "vendor_quote_request_notification",
+                "language_code": "en",
+                "body_params": [
+                    v_name,  # {{1}} Vendor display name (renders after "Hi Mr.")
+                    b_name,  # {{2}} Builder name (… garu)
+                    c_name,  # {{3}} Company
+                    proj,    # {{4}} Project
+                    loc      # {{5}} Delivery location
+                ],
+                "button_param": encoded,   # appended to base URL set in the template
+                "button_index": 0          # first (only) button
+            }
+        )
+        return
+    except Exception as e:
+        print("Template send failed, falling back to link CTA:", e)
+
+    # --- Fallback: your existing link_cta path (kept as-is) ---
     project_line = _format_project_line(project_name, project_location)
     message_lines = [
-        "👷 Thirtee  procurement request",
+        "👷 Thirtee procurement request",
         f"Project: {project_line}",
     ]
     if item_count is not None:
@@ -73,6 +129,7 @@ async def send_quote_request_to_vendor(
     )
 
 
+
 async def notify_user_quote_ready(
     state: dict,
     user_id: str,
@@ -81,7 +138,7 @@ async def notify_user_quote_ready(
     project_name: Optional[str] = None,
     project_location: Optional[str] = None,
     vendor_labels: Optional[List[str]] = None,
-) -> None:
+) -> dict:
     """Let the supervisor know that their request has been sent to vendors."""
     if not user_id:
         return
@@ -168,6 +225,21 @@ async def handle_quote_flow(
                 project_name=project_name,
                 project_location=project_location,
                 item_count=item_count,
+                #Dummy data for template params
+                vendor_display_name="Likhitha",
+                builder_name="Chandu Babu",
+                company_name="Briklay Constructions",
+
+            )
+            notified_labels.append(vendor_label or vendor_id)
+            notified_ids.append(vendor_id)
+            print(
+                "quotation_handler ::::: handle_quote_flow : notified vendor",
+                vendor_id,
+                vendor_display_name="Likhitha",
+                builder_name="Chandu Babu",
+                company_name="Briklay Constructions",
+
             )
             notified_labels.append(vendor_label or vendor_id)
             notified_ids.append(vendor_id)
@@ -202,7 +274,7 @@ async def handle_quote_flow(
     print("quotation_handler ::::: handle_quote_flow :::: notify user", user_id)
     print("quotation_handler ::::: handle_quote_flow :::: request id", request_id)
     try:
-        await notify_user_quote_ready(
+       state = await notify_user_quote_ready(
             state,
             user_id=user_id,
             request_id=request_id,
