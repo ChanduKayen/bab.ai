@@ -17,7 +17,7 @@ class CreditCRUD:
         user = res.scalar_one_or_none()
         if user:
             return user
-        user = User(sender_id=sender_id, user_full_name=(full_name or "Bab.ai User").strip())
+        user = User(sender_id=sender_id, user_full_name=(full_name or "Thirtee  User").strip())
         self.session.add(user)
         await self.session.commit()
         await self.session.refresh(user)

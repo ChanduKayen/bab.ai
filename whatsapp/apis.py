@@ -271,20 +271,42 @@ async def get_orders_for_sender(sender_id: str, limit: int = Query(20, ge=1, le=
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+from urllib.parse import urlencode, quote
+import json
+import requests
+
+
 def get_review_order_url(url: str, headers: dict = None, params: dict = None) -> str:
+    """
+    Build and verify a review-order URL.
+    - Performs a GET request to validate the endpoint.
+    - Encodes params as compact JSON and URL-encodes them into a ?data=... param.
+
+    Example:
+        params = {"uuid": "123", "senderId": "9199...", "vendorId": "abc"}
+        → https://.../orders/review-order?data=%7B%22uuid%22%3A%22123%22...%7D
+    """
     try:
-        print("get_review_order_url:::: Verifying URL")
-        response = requests.get(url, headers=headers, params=params)
+        print("get_review_order_url ::: verifying URL")
+
+        # Step 1: Verify the base URL is reachable (optional but keeps your debug behavior)
+        response = requests.get(url, headers=headers)
         response.raise_for_status()
-        
+
+        # Step 2: Encode params dict (if provided) into compact JSON → URL-safe
         if params:
-            url = f"{url}?{urlencode(params)}"
-        print("get_review_order_url :::: response :", str(response))
-        print("get_review_order_url :::: response params code :", params)
-        return url
+            encoded_json = quote(json.dumps(params, separators=(",", ":")))
+            final_url = f"{url}?data={encoded_json}"
+        else:
+            final_url = url
+
+        print("get_review_order_url ::: ✅ verified:", response.status_code)
+        print("get_review_order_url ::: final encoded URL:", final_url)
+        return final_url
+
     except Exception as e:
-        print("get_review_order_json :::: Error fetching data:", str(e))
-        return "Error fetching data: " + str(e)
+        print("get_review_order_url ::: ❌ error:", str(e))
+        return f"Error fetching data: {str(e)}"
 
 
 # ------------------------------ Confirm Order ------------------------------

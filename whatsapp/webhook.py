@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Request, Depends, Request
-from agents import procurement_agent
+from agents import procurement_agent, vendor_agent
 from orchastrator.core import builder_graph 
 import sys 
 from fastapi.responses import PlainTextResponse
@@ -11,7 +11,7 @@ router = APIRouter()
 from app.logging_config import logger
 import requests
 from pathlib import Path
-
+from whatsapp.builder_out import mark_read, send_typing_indicator_meta
 # Load environment variables
 load_dotenv()
 APP_SECRET = os.getenv("APP_SECRET", None)
@@ -24,7 +24,6 @@ from agents.random_agent import classify_and_respond
 from agents.procurement_agent import collect_procurement_details_interactively
 from agents import credit_agent
 from whatsapp.builder_out import whatsapp_output
-from users.user_onboarding_manager import user_status
 #from database._init_ import AsyncSessionLocal
 from app.db import get_sessionmaker
 AsyncSessionLocal = get_sessionmaker()
@@ -42,10 +41,14 @@ import json
 from hashlib import sha256
 from app.db import get_db
 from database.whatsapp_crud import first_time_event
-
+from openai import OpenAI
+import os
+import users.user_onboarding_manager as user_onboarding_manager
+from users.user_onboarding_manager import ensure_user_and_state_fields
+from database.models import UserStage
+from typing import Dict, List, Optional
 #This has to be updated accroding to he phone number you are using for the whatsapp business account.
-PHONE_NUMBER_ID = os.getenv("PHONE_NUMBER_ID")
-WHATSAPP_API_URL = f"https://graph.facebook.com/v19.0/{PHONE_NUMBER_ID}/messages"
+WHATSAPP_API_URL = "https://graph.facebook.com/v19.0/712076848650669/messages"
 #ACCESS_TOKEN = "EAAIMZBw8BqsgBO4ZAdqhSNYjSuupWb2dw5btXJ6zyLUGwOUE5s5okrJnL4o4m89b14KQyZCjZBZAN3yZBCRanqLC82m59bGe4Rd2BPfRe3A3pvGFZCTf2xB7a6insIzesPDVMLIw4gwlMkkz7NGl3ZBLvP5MU8i3mZBMmUBShGeQkSlAyRhsXJtlsg8uGaAfYwTid8PZAGBKnbOR3LFpCgBD8ZCIMJh9xI0sHWy"  
 
 ACCESS_TOKEN = os.getenv("WHATSAPP_ACCESS_TOKEN")
@@ -58,6 +61,108 @@ MEDIA_DOWNLOAD_DIR = Path(MEDIA_DOWNLOAD_PATH)
 # implementing a presistnace layer to preseve the chat history tha saves the state of messages for followup questions required by UOC manager 
 #r = redis.Redis(host='localhost', port=6379, decode_responses=True)
 memory_store = {}
+PHOTO_DEBOUNCE_SECONDS = float(os.getenv("PHOTO_DEBOUNCE_SECONDS", "5"))
+_media_batch_tasks: Dict[str, asyncio.Task] = {}
+
+
+def _cancel_media_batch_task(sender_id: str) -> None:
+    task = _media_batch_tasks.pop(sender_id, None)
+    if task and not task.done():
+        task.cancel()
+
+
+def _schedule_media_batch_processing(sender_id: str) -> None:
+    async def _runner() -> None:
+        try:
+            await asyncio.sleep(PHOTO_DEBOUNCE_SECONDS)
+            await _process_media_batch(sender_id)
+        except asyncio.CancelledError:
+            return
+        except Exception:
+            logging.exception("Webhook :::::: media batch processing failed")
+        finally:
+            _media_batch_tasks.pop(sender_id, None)
+
+    _cancel_media_batch_task(sender_id)
+    _media_batch_tasks[sender_id] = asyncio.create_task(_runner())
+
+
+async def _flush_media_batch(sender_id: str) -> None:
+    task = _media_batch_tasks.pop(sender_id, None)
+    if task and not task.done():
+        task.cancel()
+    await _process_media_batch(sender_id)
+
+
+async def _process_media_batch(sender_id: str) -> None:
+    state = get_state(sender_id)
+    if not state:
+        return
+    if not state.get("media_batch_pending"):
+        return
+
+    messages = list(state.pop("media_batch_messages", []) or [])
+    state.pop("media_batch_pending", None)
+    state.pop("last_media_at", None)
+
+    if not messages:
+        save_state(sender_id, state)
+        return
+
+    photos: List[Dict[str, str]] = []
+    for item in messages:
+        if item.get("type") != "image":
+            continue
+        media_id = item["image"].get("id")
+        caption = item["image"].get("caption", "")
+        if not media_id:
+            continue
+        path = download_whatsapp_image(media_id)
+        if not path:
+            continue
+        photos.append({"image_path": path, "caption": caption})
+
+    if not photos:
+        save_state(sender_id, state)
+        return
+
+    state["batched_images"] = photos
+    state["batched_photos"] = photos
+    state["image_path"] = photos[0]["image_path"]
+    state["caption"] = photos[0].get("caption", "")
+    state["media_url"] = photos[0]["image_path"]
+    state["media_batch_processing"] = True
+    save_state(sender_id, state)
+
+    contacts = state.get("user_full_name")
+    payload = {
+        "entry": [
+            {
+                "changes": [
+                    {
+                        "value": {
+                            "messages": [messages[0]],
+                            "contacts": [
+                                {
+                                    "profile": {"name": contacts}
+                                }
+                            ],
+                        }
+                    }
+                ]
+            }
+        ]
+    }
+
+    try:
+        await handle_whatsapp_event(payload)
+    finally:
+        fresh_state = get_state(sender_id) or state
+        fresh_state.pop("media_batch_processing", None)
+        fresh_state.pop("media_batch_messages", None)
+        fresh_state.pop("media_batch_pending", None)
+        fresh_state.pop("last_media_at", None)
+        save_state(sender_id, fresh_state)
 
 def get_state(sender_id: str): 
     print("Webhook :::::: get_state::::: Getting state for sender_id:", sender_id)
@@ -229,6 +334,157 @@ def extract_event_id(payload: dict) -> str:
         return payload["entry"][0]["changes"][0]["value"]["messages"][0]["id"]
     except Exception:
         return sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
+
+import subprocess
+from typing import Optional
+import base64
+
+def download_whatsapp_audio(media_id: str) -> Optional[dict]:
+    """
+    Downloads an audio/voice media file from WhatsApp Graph API.
+    Returns dict with {'original_path', 'normalized_wav_path', 'mime_type', 'duration'} or None on failure.
+    """
+    media_info_url = f"https://graph.facebook.com/v19.0/{media_id}"
+    headers = {"Authorization": f"Bearer {ACCESS_TOKEN}"}
+    print("Webhook :::::: download_whatsapp_audio::::: Getting media info:", media_info_url)
+
+    try:
+        res = requests.get(media_info_url, headers=headers, timeout=10)
+        res.raise_for_status()
+    except Exception as err:
+        print("Webhook :::::: download_whatsapp_audio::::: Failed to get media info:", err)
+        return None
+
+    info = res.json()
+    media_url  = info.get("url")
+    mime_type  = info.get("mime_type", "")
+    if not media_url:
+        print("Webhook :::::: download_whatsapp_audio::::: No media URL in response")
+        return None
+
+    try:
+        MEDIA_DOWNLOAD_DIR.mkdir(parents=True, exist_ok=True)
+    except Exception as err:
+        print("Webhook :::::: download_whatsapp_audio::::: Failed to ensure download dir:", err)
+        return None
+
+    # choose extension
+    ext = ".ogg" if "ogg" in mime_type or "opus" in mime_type else \
+          ".mp3" if "mpeg" in mime_type else \
+          ".wav" if "wav" in mime_type else ".bin"
+    original_path = MEDIA_DOWNLOAD_DIR / f"{media_id}{ext}"
+
+    try:
+        # IMPORTANT: pass auth header for the actual download as well
+        media_res = requests.get(media_url, headers=headers, stream=True, timeout=30)
+        media_res.raise_for_status()
+        with open(original_path, "wb") as f:
+            for chunk in media_res.iter_content(8192):
+                if chunk:
+                    f.write(chunk)
+    except Exception as err:
+        print("Webhook :::::: download_whatsapp_audio::::: Failed to download/save:", err)
+        return None
+
+    print(f"Webhook :::::: download_whatsapp_audio::::: Saved audio to {original_path}")
+
+    # (Optional) normalize to 16 kHz mono WAV for STT engines later
+    normalized_wav_path = None
+    # try:
+    #     # Only transcode if not already a 16kHz wav
+    #     normalized_wav_path = str(MEDIA_DOWNLOAD_DIR / f"{media_id}_16k.wav")
+    #     subprocess.run(
+    #         ["ffmpeg", "-y", "-i", str(original_path), "-ac", "1", "-ar", "16000", normalized_wav_path],
+    #         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True
+    #     )
+    #     print("Webhook :::::: download_whatsapp_audio::::: Normalized WAV created:", normalized_wav_path)
+    # except Exception as err:
+    #     print("Webhook :::::: download_whatsapp_audio::::: ffmpeg not available or failed:", err)
+    #     normalized_wav_path = None
+
+    return {
+        "original_path": str(original_path),
+        "normalized_wav_path": normalized_wav_path,
+        "mime_type": mime_type,
+        # duration is added in the handler from msg payload if present
+    }
+
+client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+
+async def transcribe_with_whisper(state: dict):
+    audio_path = state.get("media_url")
+    print("Webhook :::::: transcribe_with_whisper::::: Transcribing audio at path:", audio_path)
+    if not audio_path:
+        return state
+    with open(audio_path, "rb") as f:
+        tx = client.audio.transcriptions.create(model="whisper-1", file=f)
+    text = (tx.text or "").strip()
+    print("Webhook :::::: transcribe_with_whisper::::: Transcription result:", text)
+    if text:
+        state["audio_transcript"] = text
+        state["messages"].append({"role": "user", "content": text})
+        state["msg_type"] = "text"
+    return state
+
+
+# async def analyze_audio_with_gpt(state: dict, task_prompt: str = "Transcribe this voice note accurately."):
+   
+#     try:
+#         audio_path = state.get("audio_path") or state.get("media_url")
+#         if not audio_path or not os.path.exists(audio_path):
+#             print("GPT-Audio ::::: No valid audio_path found in state.")
+#             return state
+        
+#         # Convert OGG → MP3 if required
+#         audio_path = convert_to_mp3_if_needed(audio_path)
+#         audio_format = "mp3" if audio_path.lower().endswith(".mp3") else "wav"
+
+#         # Initialize OpenAI client
+#         client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+       
+#         # Open audio file
+#         with open(audio_path, "rb") as audio_file:
+#             audio_bytes = audio_file.read()
+#             audio_b64 = base64.b64encode(audio_bytes).decode("utf-8")
+#             print("GPT-Audio ::::: Sending audio to GPT-4o ...")
+#             response = client.chat.completions.create(
+#                 model="gpt-4o-mini",  # or "gpt-4.5" when available
+#                 messages=[
+#                     {
+#                         "role": "user",
+#                         "content": [
+#                             {"type": "input_audio", "input_audio": {"data": audio_b64, "format": "ogg"}},
+#                             {"type": "text", "text": task_prompt},
+#                         ],
+#                     }
+#                 ],
+#             )
+
+#         result_content = response.choices[0].message.content
+
+#         # GPT sometimes returns list of content blocks
+#         if isinstance(result_content, list):
+#             result_text = " ".join(
+#                 part.get("text", "") for part in result_content if part.get("type") == "output_text"
+#             )
+#         elif isinstance(result_content, str):
+#             result_text = result_content
+#         else:
+#             result_text = str(result_content)
+
+#         text = result_text or "An audio message, improperly transcribed."
+#         state["messages"].append({"role": "user", "content": text})
+#         state["msg_type"] = "text"
+#         print("GPT-Audio ::::: Audio processed successfully.", )
+
+#         return state
+
+    # except Exception as e:
+    #     print("GPT-Audio ::::: Error:", e)
+    #     state["audio_transcript"] = None
+    #     state["audio_error"] = str(e)
+    #     return state
+
 async def handle_whatsapp_event(data: dict):
     try:
         logger.info("Entered Webhook route")
@@ -240,154 +496,204 @@ async def handle_whatsapp_event(data: dict):
             logger.info("No messages found in the entry.")
             return {"status": "ignored", "reason": "No messages found"}
         messages = entry.get("messages") or []
-        if not messages:
-            logger.info("No messages found in the entry.")
-            return {"status": "ignored", "reason": "No messages found"}
-
+        msg = messages[0]
+        inbound_wamid = msg.get("id")
+        sender_id = msg["from"]
+        msg_type = msg["type"]
         contacts = entry.get("contacts", [])
         user_name = None
+        print("Webhook :::::: whatsapp_webhook::::: -- inbound_wamid to mark read --", inbound_wamid)
+        #mark_read(inbound_wamid)
+        #send_typing_indicator(sender_id, inbound_wamid, duration=1.5)
+
+        send_typing_indicator_meta(inbound_wamid)
+        print("Webhook :::::: whatsapp_webhook::::: Received message:", msg)
+        
+        
+        
+
         if contacts and isinstance(contacts[0], dict):
             profile = contacts[0].get("profile", {})
             if isinstance(profile, dict):
                 user_name = profile.get("name")
         print("Webhook :::::: whatsapp_webhook::::: usrname:", user_name)
-
-        first_msg = messages[0]
-        sender_id = first_msg["from"]
+        
         state = get_state(sender_id)  # Retrieve the state from Redis
         #state["user_full_name"] = user_name  
         #user = user_status(sender_id, user_name) # Dummied
         user = {"user_full_name": user_name, "user_stage": "new"}
         user_stage = user["user_stage"]
-
+        
         if state is None:
             state = {
                 "sender_id": sender_id,
                 "messages": [],  
                 "agent_first_run": True,             
                 "needs_clarification": False,
-                "uoc_last_called_by": None,
+                "uoc_last_called_by": None, 
                 "uoc_confidence": "low",
                 "uoc": {}, 
                 "user_full_name": user_name,    
-                "user_stage": user_stage,    
+                "user_stage": "new",    
+                "inbound_wamid": inbound_wamid
             }
         else:
             state["user_full_name"] = user_name
-            state["user_stage"] = user_stage  
-        new_photos = []
-        for msg in messages:
-            print("Webhook :::::: whatsapp_webhook::::: Received message:", msg)
-            msg_type = msg["type"]
-            sender_id = msg.get("from", sender_id)
+            state["user_stage"] = "new" 
+            
+            
+ 
+        try:
+            async with AsyncSessionLocal() as session:
+                print("Webhook :::::: whatsapp_webhook::::: Upserting user with sender_id:", sender_id)
+                await user_onboarding_manager.ensure_user_and_state_fields(
+                    session,
+                    sender_id=sender_id,
+                    user_full_name=user_name,
+                    user_stage=UserStage.NEW, 
+                    user_identity=None,  # or the E.164 phone if you treat it as identity
+                    state = state
+                )
+                await session.commit()
+                print("Webhook:::whatsapp_webhook::::: Users Category is  ", state)
+        except Exception as e:
+            print("Webhook :::::: user upsert failed:", e)
+        role = await user_onboarding_manager.get_user_role(session, sender_id=sender_id)
+        state["user_category"] = role 
 
-            if msg_type == "text":
-                text = msg["text"]["body"]
-                state["messages"].append({"role": "user", "content": text})
-                state["msg_type"] = "text"
+        is_batch_processing = state.get("media_batch_processing", False)
 
-            elif msg_type == "image":
-                media_id = msg["image"]["id"]
-                caption = msg["image"].get("caption", "")
+        if len(messages) > 1 and not is_batch_processing:
+            pending = list(state.get("media_batch_messages") or [])
+            for extra_msg in messages[1:]:
+                if extra_msg.get("type") == "image":
+                    pending.append(extra_msg)
+            if pending:
+                state["media_batch_messages"] = pending
 
+        if state.get("media_batch_pending") and not is_batch_processing and msg_type not in ("image", "document"):
+            await _flush_media_batch(sender_id)
+            state = get_state(sender_id) or state
+            is_batch_processing = state.get("media_batch_processing", False)
+
+        if msg_type == "image" and not is_batch_processing:
+            pending = list(state.get("media_batch_messages") or [])
+            pending.append(msg)
+            state["media_batch_messages"] = pending
+            state["media_batch_pending"] = True
+            state["last_media_at"] = time.time()
+            save_state(sender_id, state)
+            _schedule_media_batch_processing(sender_id)
+            return {"status": "media_batch_scheduled"}
+
+        if msg_type == "text":
+            text = msg["text"]["body"]
+            state["messages"].append({"role": "user", "content": text})
+            state["msg_type"] = "text"
+        
+        elif msg_type == "image":
+            media_id = msg["image"]["id"]
+            caption = msg["image"].get("caption", "")
+
+            if state.get("media_batch_processing") and state.get("image_path"):
+                image_path = state["image_path"]
+                print("Webhook :::::: whatsapp_webhook::::: Using preloaded image path:", image_path)
+            else:
                 image_path = download_whatsapp_image(media_id)
                 print("Webhook :::::: whatsapp_webhook::::: Image downloaded, path:", image_path)
-                state["messages"].append({
-                    "role": "user",
-                    "content": f"[Image ID: {media_id}] {caption}"
-                })
-                state["msg_type"] = "image"
-                state["media_url"] = image_path
-                new_photos.append({
-                    "image_path": image_path,
-                    "caption": caption,
-                })
 
-                print("Webhook :::::: whatsapp_webhook::::: Image downloaded and saved at:", image_path)
+            state["messages"].append({
+                "role": "user",
+                "content": f"[Image ID: {media_id}] {caption}"  # Or you could pass separately
+            })
+            state["media_id"] = media_id   
+            state["image_path"] = image_path  
+            state["caption"] = caption
+            state["msg_type"] = "image"
+            state["media_url"] = image_path
 
-            elif msg_type == "interactive":
-                interactive_type = msg["interactive"]["type"]
-                if interactive_type == "button_reply":
-                    reply_id = msg["interactive"]["button_reply"]["id"]
-                elif interactive_type == "list_reply":
-                    reply_id = msg["interactive"]["list_reply"]["id"]
-                else:
-                    reply_id = "unknown_interactive"
-
-                state["messages"].append({"role": "user", "content": reply_id})
-                state["msg_type"] = "interactive"
-                state.pop("image_path", None)
-                state.pop("media_id", None)
-                state.pop("caption", None)
-                state.pop("media_url", None)
-                print(f"Webhook :::::: whatsapp_webhook::::: Captured interactive reply: {reply_id}")
-
-            elif msg_type == "document":
-                media_id = msg["document"]["id"]
-                file_name = msg["document"].get("filename", "document")
-
-                # Fetch download URL & metadata
-                meta_resp = requests.get(
-                    f"https://graph.facebook.com/v19.0/{media_id}",
-                    params={"access_token": ACCESS_TOKEN},
-                    timeout=10,
-                )
-
-                if meta_resp.status_code != 200:
-                    print("Webhook :::::: Failed to fetch document meta:", meta_resp.text)
-                    return {"status": "ignored", "reason": "Cannot fetch document"}
-
-                media_info = meta_resp.json()
-                media_url = media_info.get("url")
-                mime_type = media_info.get("mime_type", "")
-
-                # Decide file type
-                file_type = "pdf" if mime_type == "application/pdf" else "document"
-
-                # Download the file
-                ext = ".pdf" if file_type == "pdf" else ".bin"
-                local_path = MEDIA_DOWNLOAD_DIR / f"{media_id}{ext}"
-                try:
-                    file_data = requests.get(media_url, timeout=10).content
-                    with open(local_path, "wb") as fp:
-                        fp.write(file_data)
-                    print(f"Webhook :::::: Saved document to {local_path}")
-                except Exception as e:
-                    print("Webhook :::::: Failed to download and save document:", e)
-                    return {"status": "ignored", "reason": "Failed to download"}
-
-                # Try optional text extraction for PDFs
-                if file_type == "pdf":
-                    try:
-                        import fitz  # PyMuPDF
-                        doc = fitz.open(str(local_path))
-                        pdf_text = "".join(page.get_text() for page in doc)
-                        doc.close()
-                        state["pdf_text"] = pdf_text
-                    except Exception as e:
-                        print("Webhook :::::: PDF text extraction failed:", e)
-
-                # Add synthetic user message & metadata
-                state["messages"].append({
-                    "role": "user",
-                    "content": f"[Document ID: {media_id}] {file_name}"
-                })
-
-                state["media_id"] = media_id
-                state["file_name"] = file_name
-                state["msg_type"] = file_type
-                state["media_url"] = str(local_path)
+            print("Webhook :::::: whatsapp_webhook::::: Image ready at:", image_path)
+        elif msg_type == "interactive":
+            interactive_type = msg["interactive"]["type"]
+            if interactive_type == "button_reply":
+                reply_id = msg["interactive"]["button_reply"]["id"]
+            elif interactive_type == "list_reply":
+                reply_id = msg["interactive"]["list_reply"]["id"]
             else:
-                print(f"Webhook :::::: whatsapp_webhook::::: Unsupported message type {msg_type}")
-                continue
+                reply_id = "unknown_interactive"
+             
+            state["messages"].append({"role": "user", "content": reply_id})
+            state["msg_type"] = "interactive"
+            print(f"Webhook :::::: whatsapp_webhook::::: Captured interactive reply: {reply_id}")
 
-        msg = messages[-1]
+        elif msg_type == "document":
+            media_id  = msg["document"]["id"]
+            file_name = msg["document"].get("filename", "document")
 
-        if new_photos:
-            state["batched_photos"] = new_photos
-            first_photo = new_photos[0]
-            state["image_path"] = first_photo["image_path"]
-            state["caption"] = first_photo.get("caption", "")
+            # Fetch download URL & metadata
+            meta_resp = requests.get(
+                f"https://graph.facebook.com/v19.0/{media_id}",
+                params={"access_token": ACCESS_TOKEN},
+                timeout=10,
+            )
+
+            if meta_resp.status_code != 200:
+                print("Webhook :::::: Failed to fetch document meta:", meta_resp.text)
+                return {"status": "ignored", "reason": "Cannot fetch document"}
+            
+            media_info = meta_resp.json()
+            media_url  = media_info.get("url")
+            mime_type  = media_info.get("mime_type", "")
+            
+            # Decide file type
+            file_type = "pdf" if mime_type == "application/pdf" else "document"
+
+            # Download the file
+            ext = ".pdf" if file_type == "pdf" else ".bin"
+            local_path = MEDIA_DOWNLOAD_DIR / f"{media_id}{ext}"
+            try:
+                file_data = requests.get(media_url, timeout=10).content
+                with open(local_path, "wb") as fp:
+                    fp.write(file_data)
+                print(f"Webhook :::::: Saved document to {local_path}")
+            except Exception as e:
+                print("Webhook :::::: Failed to download and save document:", e)
+                return {"status": "ignored", "reason": "Failed to download"}
+
+            # Try optional text extraction for PDFs
+            if file_type == "pdf":
+                try:
+                    import fitz  # PyMuPDF
+                    doc = fitz.open(str(local_path))
+                    pdf_text = "".join(page.get_text() for page in doc)
+                    doc.close()
+                    state["pdf_text"] = pdf_text
+                except Exception as e:
+                    print("Webhook :::::: PDF text extraction failed:", e)
+
+            # Add synthetic user message & metadata
+            state["messages"].append({
+                "role": "user",
+                "content": f"[Document ID: {media_id}] {file_name}"
+            })
+
+            state["media_id"] = media_id
+            state["file_name"] = file_name
+            state["msg_type"] = file_type
+            state["media_url"] = str(local_path)
+        elif msg_type == "audio":
+            print("Webhook :::::: whatsapp_webhook::::: Processing audio message")
+            audio_obj = msg["audio"]
+            media_id  = audio_obj["id"]
+            # duration  = audio_obj.get("duration")  # seconds (int), if present
+            caption   = ""
+            audio_meta = download_whatsapp_audio(media_id)
+            state["media_url"] = audio_meta["original_path"]
+            
+            state = await transcribe_with_whisper(state)
+
+        else:
+            return {"status": "ignored", "reason": f"Unsupported message type {msg_type}"}
 
 
 
@@ -433,7 +739,7 @@ async def handle_whatsapp_event(data: dict):
 
 "That’s fine. You’ll be done in under a minute — we’ll match future updates to this project for you.",
 
-"Sure, we work with whatever you’ve got. Just a few taps now — Bab.ai will keep everything neatly linked from here on.",
+"Sure, we work with whatever you’ve got. Just a few taps now — Thirtee  will keep everything neatly linked from here on.",
         ]
 
         PROJECT_SELECTION_MESSAGES = [
@@ -490,7 +796,14 @@ async def handle_whatsapp_event(data: dict):
                             followups_state = await classify_and_respond(state, config={"configurable": {"crud": crud}})
                     except Exception as e:
                         print("Webhook :::::: whatsapp_webhook::::: Error calling classify_and_respond in onboarding:", e)
-            
+            # elif q_type == "user_onboarding":
+            #         print("Webhook :::::: whatsapp_webhook::::: <pending_question True>::::: -- The set question type is random, so calling ??classify_and_respond?? --")
+            #         try:
+            #             async with AsyncSessionLocal() as session:
+            #                 crud = DatabaseCRUD(session)
+            #                 followups_state = await classify_and_respond(state, config={"configurable": {"crud": crud}})
+            #         except Exception as e:
+            #             print("Webhook :::::: whatsapp_webhook::::: Error calling classify_and_respond in onboarding:", e)
             
             elif q_type == "project_formation":
                 whatsapp_output(sender_id, random.choice(PROJECT_FORMATION_MESSAGES), message_type="plain")
@@ -625,6 +938,13 @@ async def handle_whatsapp_event(data: dict):
                 except Exception as e:
                     print("Webhook :::::: whatsapp_webhook::::: Error calling credit_agent.handle_credit_status_check:", e)
                     import traceback; traceback.print_exc()
+            elif q_type == "vendor_new_user_flow":
+                print("Webhook :::::: whatsapp_webhook::::: <needs_clarification True>::::: <uoc_question_type>::::: -- The set question type is vendor_new_user_flow, so calling ??vendor_agent.run_vendor_agent?? --", state["uoc_question_type"])
+                try:
+                    followups_state = await vendor_agent.run_vendor_agent(state, config={"configurable": {"crud": crud}})
+                except Exception as e:
+                    print("Webhook :::::: whatsapp_webhook::::: Error calling vendor_agent.run_vendor_agent:", e)
+                    import traceback; traceback.print_exc()
             else:
                 raise ValueError(f"Unknown uoc_question_type: {state['uoc_question_type']}")
 
@@ -655,22 +975,35 @@ async def handle_whatsapp_event(data: dict):
 # No need to go back to orchestrator (builder_graph) — decision was made earlier.
 #The main question may arise from the lack of clairty of who owns the control flow and the return path?  - Which is now addressed by the above code.
            
-        elif state.get("needs_clarification") is False:
+        elif state.get("needs_clarification") is False :
             print("Webhook :::::: whatsapp_webhook::::: <needs_clarification False>:::::  -- Calling orchestrator, this is a first time message --")
-            #whatsapp_output(sender_id, random.choice(FIRST_TI ME_MESSAGES), message_type="plain")
-            state["user_full_name"] = user_name  # Update the user's full name in the state
-            #result = await builder_graph.ainvoke(state)
-            
-            print("Calling builder_graph:", builder_graph)
-            print("Type of builder_graph:", type(builder_graph))
-            #PassingDB Session as a  contextwrapper to Langgraph; dont send crud in a state, it break the serialization. 
-            async with AsyncSessionLocal() as session:
-             crud = DatabaseCRUD(session)
-             result = await builder_graph.ainvoke(input=state, config={"crud": crud})
-             
+            print("Calling builder_graph with user category is:", state.get("user_category"))
+            if  state.get("user_category") == "VENDOR":
+                print("Calling vendor_agent directly")
+                # result = {
+                #     "latest_respons": "Hello Vendor! How can I assist you today?",
+                #     "uoc_next_message_type": "plain",
+                #     "uoc_next_message_extra_data": None
+                # }
+                async with AsyncSessionLocal() as session:
+                    crud = DatabaseCRUD(session)
+                    result = await vendor_agent.run_vendor_agent(state, config={"crud": crud})
+                    
+                
+            elif state.get("user_category") == "BUILDER" or state.get("user_category") == "USER" or state.get("user_category") is None:
+            #whatsapp_output(sender_id, random.choice(FIRST_TIME_MESSAGES), message_type="plain")
+                state["user_full_name"] = user_name  # Update the user's full name in the state
+                #result = await builder_graph.ainvoke(state)
+                
+                print("Calling builder_graph:", builder_graph)
+                print("Type of builder_graph:", type(builder_graph))
+                #PassingDB Session as a  contextwrapper to Langgraph; dont send crud in a state, it break the serialization. 
+                async with AsyncSessionLocal() as session:
+                    crud = DatabaseCRUD(session)
+                    result = await builder_graph.ainvoke(input=state, config={"crud": crud})
+                    print("Result from builder_graph:", result)
  
-
-            save_state(sender_id, result)
+                save_state(sender_id, result) 
             #print("Webhook :::::: whatsapp_webhook::::: <needs_clarification False>:::::  -- Got result from the Orchestrator, saved the state : --", get_state(sender_id))
             # print("result after saving in condition ", result)
         # Send final reply
@@ -681,6 +1014,7 @@ async def handle_whatsapp_event(data: dict):
         extra_data= result.get("uoc_next_message_extra_data", None)
         print("Webhook :::::: whatsapp_webhook:::::-- ******Sending message to whatsapp****** Attributes :", message_type, extra_data)
         try:
+           
             whatsapp_output(sender_id, response_msg, message_type=message_type, extra_data=extra_data)
             logger.info("Final response sent to WhatsApp")
         except Exception as send_err:
@@ -689,7 +1023,7 @@ async def handle_whatsapp_event(data: dict):
     
        
     except Exception as e:
-        logger.error("Error in WhatsApp webhook:{e}")
+        logger.error(f"Error in WhatsApp webhook: {e}")
         #logger.error(e, exc_info=True)
         return {"status": "error", "message": str(e)}
 
@@ -745,6 +1079,6 @@ async def whatsapp_webhook(
 
 async def _safe_handle_whatsapp_event(payload: dict):
     try:
-        await handle_whatsapp_event(payload)  # <-- your async worker
+        await handle_whatsapp_event(payload)  
     except Exception:
         logging.exception("handle_whatsapp_event failed")

@@ -61,7 +61,7 @@ def get_engine() -> AsyncEngine:
         connect_args.setdefault("timeout", timeout)
         kwargs.update(pool_size=10, max_overflow=20, connect_args=connect_args)
 
-    return create_async_engine(url, echo=True, **kwargs)
+    return create_async_engine(url, echo=False, **kwargs)
 
 def get_sessionmaker() -> async_sessionmaker:
     global _SessionLocal

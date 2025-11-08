@@ -16,22 +16,23 @@ _llm = ChatOpenAI(model="gpt-4o-mini", temperature=0, openai_api_key=os.getenv("
 ALLOWED = {
   "procurement": [
     "start_order",        # ask/confirm materials, qty, units, location, need-by
-    "order_followup",     # track / modify / compare / issue — all post-order actions
+    "quote_followup",     # track / modify / compare / issue — all post-quote actions
+    #"status",             # track order status by order ID
     "upload",             # photo/invoice/BOQ intake that drafts an order
     "help"                # quick Qs about process/pricing without details yet
   ],
-  "credit": [
-    "limit_or_kyc",       # check eligibility/limit or start KYC (same entry path)
-    "pay_vendor",         # make/arrange vendor payment
-    "status_or_repay",    # application status / statement / repayment info
-    "help"
-  ],
-  "siteops": [
-    "setup",              # create/select site (name + location)
-    "progress",           # log progress / upload photo (same entry path)
-    "summary",            # risks/follow-ups / site summary
-    "help"
-  ],
+#   "credit": [
+#     "limit_or_kyc",       # check eligibility/limit or start KYC (same entry path)
+#     "pay_vendor",         # make/arrange vendor payment
+#     "status_or_repay",    # application status / statement / repayment info
+#     "help"
+#   ],
+#   "siteops": [
+#     "setup",              # create/select site (name + location)
+#     "progress",           # log progress / upload photo (same entry path)
+#     "summary",            # risks/follow-ups / site summary
+#     "help"
+#   ],
   "ambiguous": ["help", # unclear but meaningful inetent realted ot bab-ai; router uses last_known_intent
                 "chit-chat" # unrealted chatter
                 ]   
@@ -44,7 +45,8 @@ _JSON_ANY = re.compile(r"\{.*?\}", re.S)
 REQUIRED_SLOTS = {
   # Procurement
   ("procurement","start_order"):   ["materials","quantity","units","location","needed_by_date"],
-  ("procurement","order_followup"):["order_id"],
+  ("procurement","quote_followup"):["order_id"],
+  #("procurement","status"):  ["order_id"],
   ("procurement","upload"):        ["doc_present","doc_type"],   # {"photo","invoice","boq","other"}
   ("procurement","help"):          [],
 
@@ -117,7 +119,7 @@ TEMPLATES = {
         "buttons": [{"id":"credit_limit","title":"📈 Check Limit"}],
     },
     ("credit","vendor_payment"): {
-        "text": "💸 Pay a vendor via Bab.ai Credit. Share *vendor, amount, order ID*.",
+        "text": "💸 Pay a vendor via Thirtee  Credit. Share *vendor, amount, order ID*.",
         "buttons": [{"id":"credit_pay","title":"💳 Pay Vendor"}],
     },
     ("credit","repayment_info"): {
@@ -125,7 +127,7 @@ TEMPLATES = {
         "buttons": [{"id":"credit_repay","title":"📅 Repayment"}],
     },
     ("credit","trust_score"): {
-        "text": "🔎 Your Bab.ai Trust Score speeds up approvals. Want to see it and how to improve?",
+        "text": "🔎 Your Thirtee  Trust Score speeds up approvals. Want to see it and how to improve?",
         "buttons": [{"id":"trust_score","title":"🔎 View Score"}],
     },
 
@@ -237,8 +239,8 @@ User message:
 def _format_prompt(user_text: str) -> str:
     return (CLASSIFY_PROMPT
         .replace("%PROC%", ", ".join(ALLOWED["procurement"]))
-        .replace("%CRED%", ", ".join(ALLOWED["credit"]))
-        .replace("%SITE%", ", ".join(ALLOWED["siteops"]))
+       # .replace("%CRED%", ", ".join(ALLOWED["credit"]))
+       #  .replace("%SITE%", ", ".join(ALLOWED["siteops"]))
         .replace("%MSG%", (user_text or "").strip())
     )
 
@@ -403,7 +405,7 @@ async def route_and_respond(state: Dict[str, Any]) -> Dict[str, Any]:
     #if state["last_known_intent"] not in {"procurement","credit","siteops"} and chosen_intent =="random":
 
  
-    if chosen_intent =="procurement" and context in {"start_order","order_followup","upload","upload_doc","help", "chit-chat"}:
+    if chosen_intent =="procurement" and context in {"start_order","quote_followup","upload","upload_doc","help", "chit-chat"}:
         print("Convo Router :::::: Route and Respond:::: PRocurement intent - trying_to_understand_process", "get_quotes")
         from agents.procurement_agent import run_procurement_agent
         
@@ -453,3 +455,4 @@ async def _apply_state(state: Dict[str, Any], intent: str, context: str, slots: 
     state["uoc_next_message_type"] = "button"
     state["uoc_next_message_extra_data"] = tpl.get("buttons", [])
     state["needs_clarification"] = bool(missing)
+ 

@@ -1,6 +1,6 @@
 # agents/random_router_agent.py
 # ------------------------------------------------------------------
-# WhatsApp concierge for Bab.ai.
+# WhatsApp concierge for Thirtee .
 # Now delegates FIRST to Convo Router (fast deterministic),
 # and only falls back to LLM when needed.
 #
@@ -30,8 +30,15 @@ from agents.siteops_agent import run_siteops_agent
 from agents.credit_agent import run_credit_agent
 # >>> NEW: use your Convo Router
 from utils.convo_router import route_and_respond 
+from users import user_onboarding_manager
+import fastapi
+import requests
 
 load_dotenv()
+
+# WhatsApp / Facebook access token used for media uploads; set via environment variable
+ACCESS_TOKEN = os.getenv("WHATSAPP_ACCESS_TOKEN") or os.getenv("ACCESS_TOKEN") or ""
+
 log = logging.getLogger("bab.random_router")
 
 llm = ChatOpenAI(
@@ -44,6 +51,15 @@ llm = ChatOpenAI(
 # Strict JSON helper (balanced braces, code-fence tolerant)
 # ------------------------------------------------------------------
 _JSON_ANY = re.compile(r"\{.*?\}", re.S)
+def upload_media_from_path( file_path: str, mime_type: str = "image/jpeg") -> str:
+    url = f"https://graph.facebook.com/v19.0/712076848650669/media"
+    headers = {"Authorization": f"Bearer {ACCESS_TOKEN}"}
+    files = {"file": (os.path.basename(file_path), open(file_path, "rb"), mime_type)}
+    data = {"messaging_product": "whatsapp"}
+    r = requests.post(url, headers=headers, files=files, data=data)
+    r.raise_for_status()
+    print("rocurement Agent::: upo;ad media from path :::Status",r)
+    return r.json()["id"]
 
 def strict_json(text: str) -> Dict[str, Any]:
     raw = (text or "").strip()
@@ -108,7 +124,7 @@ def strict_json(text: str) -> Dict[str, Any]:
 # ------------------------------------------------------------------
 # LLM routing prompt (global standard)
 # ------------------------------------------------------------------
-ROUTER_PROMPT = """You are Bab.ai’s WhatsApp concierge.
+ROUTER_PROMPT = """You are Thirtee ’s WhatsApp concierge.
 
 OUTPUT
 Return ONE single-line JSON object and nothing else:
@@ -126,7 +142,7 @@ GUIDE
 
 RULES
 1. Warm, concise, professional. One emoji max.
-2. If internal_msg_intent = random: respond playfully or empathetically to match the user's tone — then gracefully transition into showcasing one Bab.ai feature in a way that feels natural and almost magical.
+2. If internal_msg_intent = random: respond playfully or empathetically to match the user's tone — then gracefully transition into showcasing one Thirtee  feature in a way that feels natural and almost magical.
    ─ siteops      → cta.id "siteops",     cta.title "🏗 Manage My Site"
    ─ procurement  → cta.id "procurement", cta.title "⚡Quick Quotes"
    ─ credit       → cta.id "credit",      cta.title "💳 Pay-Later Credit"
@@ -137,12 +153,12 @@ RULES
 
 # ---------------------------- User onboarding prompts --------------------------
 NEW_USER_PROMPT = """
-You are Bab.ai — a world-class, emotionally intelligent assistant for construction professionals on WhatsApp.
+You are Thirtee  — a world-class, emotionally intelligent assistant for construction professionals on WhatsApp.
 The user has just joined (or returned). Your job is to make them feel welcomed, seen, and curious.
 
 Write a short 2–3 line message that does the following:
 1) Greet them by name using culturally appropriate tone.
-2) Briefly introduce what Bab.ai can do in a warm, trustworthy way:
+2) Briefly introduce what Thirtee  can do in a warm, trustworthy way:
    • Track site progress from photos 📸
    • Get quotes for cement, steel, etc. from trusted vendors 🧱
    • Unlock pay-later material credit instantly 💳
@@ -157,16 +173,17 @@ TRUSTED_USER_PROMPT   = "Write a short 2-line message for a trusted user that of
 
 # ---------------------------- Conversational prompts --------------------------
 CONVERSATION_SYSTEM_PROMPT = (
-    "You are Bab.ai — a smart, friendly WhatsApp assistant built for builders and construction professionals. "
+    "You are Thirtee  — a smart, friendly WhatsApp assistant built for builders and construction professionals. "
     "Read the conversation trail carefully and reply in the same language and tone as the user. "
     "Be natural, concise (1–2 short sentences, ≤120 characters, max one emoji), and sound like a trusted teammate on site. "
     "Your primary role is to help builders share their material requirements — by explaining them what you can do and what they can do"
     "and then collect the best quotations from trusted OEMs, distributors, and manufacturers. "
     "Whenever relevant, smoothly guide the conversation toward useful actions like sharing a requirement, "
     "checking prices, or exploring pay-later credit for materials. " 
-    "Explain Bab.ai’s abilities in a helpful, human tone — never like a sales pitch. "
+    "Explain Thirtee ’s abilities in a helpful, human tone — never like a sales pitch. "
     "Keep every response warm, context-aware, and conversational. "
-    "If the topic is off-track, gently bring the user back by reminding how Bab.ai can assist with procurement or credit. "
+    "If the topic is off-track, gently bring the user back by reminding how Thirtee  can assist with procurement or credit. "
+    "If the user asks for material quotes, pricing, or vendor info, or anything related to construction procurement, choose the intent \"procurement\". else choose \"random\". "
     "Never ask for sensitive personal data unless the user is clearly in a verified credit/KYC flow."
 )
 
@@ -175,6 +192,7 @@ CONVERSATION_JSON_PROMPT = (
     "Return ONLY a JSON object with this schema and nothing else:\n"
     "{\n"
     "  \"message\": \"<concise reply per constraints>\",\n"
+    "  \"intent\": \"<procurement|random>\",\n"
     "  \"cta\": { \n"
     "    \"id\": \"<siteops|procurement|credit>\",\n"
     "    \"title\": \"<≤20 chars, can include emoji>\"\n"
@@ -245,7 +263,21 @@ async def handle_procurement(state: AgentState, latest_response: str, config: di
         intent="procurement",
         latest_respons=latest_response,
         uoc_next_message_type="button",
-        uoc_question_type="procurement",
+        uoc_question_type="procurement_new_user_flow",
+        needs_clarification=True,
+        uoc_next_message_extra_data=[uoc_next_message_extra_data] if uoc_next_message_extra_data else [{"id":"procurement","title":"📷 Share Requirement"}],
+        agent_first_run=True
+    )
+    return await run_procurement_agent(state, config)
+async def handle_rfq(state: AgentState, latest_response: str, config: dict,
+                             uoc_next_message_extra_data: Optional[Dict[str, str]]=None) -> AgentState:
+    if state.get("messages"):
+        state["messages"][-1]["content"] = "guided_photo_upload"
+    state.update(
+        intent="procurement",
+        latest_response=latest_response,
+        uoc_next_message_type="button",
+        uoc_question_type="procurement_new_user_flow",
         needs_clarification=True,
         uoc_next_message_extra_data=[uoc_next_message_extra_data] if uoc_next_message_extra_data else [{"id":"procurement","title":"📷 Share Requirement"}],
         agent_first_run=True
@@ -294,8 +326,9 @@ _HANDLER_MAP = {
     "procurement": handle_procurement,
     "credit": handle_credit,
     "main_menu": handle_main_menu,
+    "rfq": handle_rfq,
 }
- 
+
 # ------------------------------------------------------------------
 # Utilities
 # ------------------------------------------------------------------
@@ -316,7 +349,7 @@ def _one_emoji(msg: str) -> str:
 def _cap_len(msg: str, limit: int = 120) -> str:
     return msg if len(msg) <= limit else msg[:limit-1] + "…"
 
- 
+
 def _last_user_text(state: AgentState) -> str: 
     if not state.get("messages"):
         return "" 
@@ -361,6 +394,7 @@ async def generate_conversational_reply_with_cta(state: AgentState) -> Dict[str,
     data = strict_json(res.content) or {}
     message = (data.get("message") or "").strip()
     print("Random agent::: Generate_conversational_reply_with_cta LLM  message:::: ", repr(message))
+    llm_intent = (data.get("intent") or "").strip().lower()
     cta = data.get("cta") or {}
     cta_id = str(cta.get("id") or "").strip().lower()
     if cta_id not in {"siteops","procurement","credit"}: 
@@ -376,7 +410,7 @@ async def generate_conversational_reply_with_cta(state: AgentState) -> Dict[str,
     default_title = DEFAULT_CTA[cta_id]["title"]
     title = cta.get("title") or default_title
     title = _cap_len(title, 20)
-    return {"message": message, "cta": {"id": cta_id, "title": title}}
+    return {"message": message, "cta": {"id": cta_id, "title": title}, "intent": llm_intent}
 
 def _first_name(full: str) -> str:
     s = (full or "there").strip()
@@ -410,12 +444,81 @@ async def classify_and_respond(state: AgentState, config: Optional[Dict[str, Any
     print("Random Agent::: Classify and respond ::: Called --------- ", intent)
     if last_lower in _HANDLER_MAP:
         return await _HANDLER_MAP[last_lower](state, latest_response=state.get("latest_respons", ""), config=config)
+    elif last_msg.lower() == "builder_user" or last_msg.lower() == "vendor_user":
+        state["user_category"] = "builder" if last_msg.lower() == "builder_user" else "vendor"
+        print(f"Random Agent:::: run_radom_agent : User category set to {state['user_category']}")
+        try:
+            async with AsyncSessionLocal() as session:
+                    #crud = ProcurementCRUD(session)
+                    await user_onboarding_manager.set_user_role(session, sender_id= state.get("sender_id", ""), role= state["user_category"])
 
-   
+        except Exception as e:
+            print("Random Agent::: Classify and respond  : failed to update user category in DB:", e)
+            state["latest_respons"] = "Sorry, there was a system error. Please try again later."
+        
+        state["uoc_next_message_type"] = "button"
+        state["uoc_question_type"] = "onboarding"
+        if state["user_category"] == "builder":
+            image_path = "C:/Users/koppi/OneDrive/Desktop/Thirtee/Marketing/builder_welcome.png"
+            media_id = upload_media_from_path( image_path, "image/jpeg")
+            state["latest_respons"] = """👋 *Welcome to Thirtee, Builder!*  
+Here I help builders like you connect with manufacturers effortlessly, instantly, and right at your fingertips.
+
+You’re now set up as a *Builder*. Let’s get your first requirement rolling.
+            """
+            state["uoc_next_message_extra_data"] = {"buttons":  [
+                     {"id": "rfq", "title": "📷 Share Requirement"}
+    
+                ],
+                "media_id": media_id,   
+                "media_type": "image",
+                }
+
+            
+            #"media_id": media_id,   --Temporarily disabling content media
+                #"media_type": "image",
+            
+            media_id = upload_media_from_path( image_path, "image/jpeg")
+            
+            state["needs_clarification"] = True
+            
+        else:
+            state["latest_respons"] = """👋 *Welcome to Thirtee, Supplier!* — where vendors connect directly with builders"""
+            state["uoc_question_type"] = "vendor_new_user_flow"
+            state["uoc_next_message_extra_data"] = [
+                {"id": "vendor_onboarding", "title": "🏭 Vendor Onboarding"}
+            ]
+        state["needs_clarification"] = True
+        return state
+    
+
+     #########Identifiying user category###################
+    if state.get("user_category", "") == None or state.get("user_category", "") == "USER":
+        print("Random Agent::: Classify and respond  : User category not set")
+        message = """👋 *Hola!* I am Thirtee, your smart assistant for construction procurement and credit.
+
+Before we proceed would you let me know if you are a *Builder* looking for materials or a *Supplier* supplying them?
+
+_This information helps me personalise your experience_"""
+
+        state["latest_respons"] = message
+        state["uoc_next_message_type"] = "button"
+        state["uoc_question_type"] = "onboarding"
+        state["needs_clarification"] = True
+        state["uoc_next_message_extra_data"] = [
+            {"id": "builder_user", "title": "👷‍♂️ I'm a Builder"},
+            {"id": "vendor_user", "title": "🏭 I'm a Supplier"},
+        ]
+        # whatsapp_output(state.get("sender_id", ""), message, message_type="button",extra_data= [
+        #     {"id": "builder_user", "title": "👷‍♂️ Builder"},
+        #     {"id": "vendor_user",  "title": "🏭 Supplier"},
+        # ])
+        return state
+
     image_present = bool(state.get("image_path"))
     if (not last_msg and not re.search(r"\w", last_msg or "")) and not image_present:
         state.update(
-            latest_respons="🙂 Need material quotes or site help? Just share a photo — Bab.ai will collect quotations directly from manufacturers.",
+            latest_respons="🙂 Need material quotes or site help? Just share a photo — Thirtee  will collect quotations directly from manufacturers.",
             uoc_next_message_type="button",
             uoc_next_message_extra_data=[{"id": "siteops", "title": "🏗 Manage My Site"}],
         )
@@ -424,7 +527,7 @@ async def classify_and_respond(state: AgentState, config: Optional[Dict[str, Any
         if state.get("agent_first_run")== True:
             print("Random Agent::: Classify and respond ::: First Run ", intent)
             username = state.get("user_full_name", "there")
-            greeting_message = f"Hello {username}! 👋 Just share a photo of what you need — Bab.ai will get quotations directly from manufacturers for you." # --- NO need of LLM Call here
+            greeting_message = f"Hello {username}! 👋 Just share a photo of what you need — Thirtee  will get quotations directly from manufacturers for you." # --- NO need of LLM Call here
             state.update(
                 latest_respons= greeting_message,
                 uoc_next_message_type="button",
@@ -445,11 +548,19 @@ async def classify_and_respond(state: AgentState, config: Optional[Dict[str, Any
 
             try:
                 convo = await generate_conversational_reply_with_cta(state) or {}
+                print("Random Agent::: Classify and respond ::: LLM convo ::: ---------------- ", convo)
                 msg = convo.get("message", "").strip()
                 cta = convo.get("cta") or {}
                 cta_id = (cta.get("id") or "").strip().lower()
                 cta_title = (cta.get("title") or "").strip()
-
+                intent = convo.get("intent", "random").strip().lower()
+                print("Random Agent::: Classify and respond ::: LLM intent ::: ---------------- ", intent)
+                if intent == "procurement" :
+                    print("Random Agent::: Classify and respond ::: Routing to Procurement Agent ")
+                    state["agent_first_run"] = True
+                    return await run_procurement_agent(state, config)
+                
+                
                 # Fallbacks if LLM didn't return a valid CTA
                 if cta_id not in {"siteops", "procurement", "credit"}:
                     cta_choice = _quick_cta_from_text(_last_user_text(state), state)

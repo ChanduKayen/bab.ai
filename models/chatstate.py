@@ -2,8 +2,10 @@ from typing import TypedDict, List, Optional
 
  
 class AgentState(TypedDict):
+    inbound_wamid: Optional[str]
     user_full_name: Optional[str]
     user_stage: Optional[str] 
+    user_category: Optional[str]
     insights: Optional[List[dict]]
     messages: List[dict]
     sender_id: str
@@ -36,4 +38,5 @@ class AgentState(TypedDict):
     credit_profile: Optional[dict]
     intent_context:Optional[str]
     last_known_intent:Optional[str]
+
     #credit_id:Optional[str]   

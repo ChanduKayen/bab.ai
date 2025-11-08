@@ -46,7 +46,7 @@ def get_engine() -> AsyncEngine:
     if not url.startswith("sqlite+aiosqlite://"):
         pool_kwargs = dict(pool_size=10, max_overflow=20)
 
-    _engine = create_async_engine(url, echo=True, **pool_kwargs)
+    _engine = create_async_engine(url, echo=False, **pool_kwargs)
     return _engine
 
 def get_sessionmaker() -> async_sessionmaker:

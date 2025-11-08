@@ -1,5 +1,7 @@
 # Bab.ai — The Intelligent OS for Construction
 
+*LLM-first operating system for construction procurement with a WhatsApp-first approach.*
+
 ![version](https://img.shields.io/badge/version-1.0.0-blue)
 ![python](https://img.shields.io/badge/python-3.8%2B-green)
 ![OpenAI](https://img.shields.io/badge/OpenAI-74aa9c?logo=openai&logoColor=white)
