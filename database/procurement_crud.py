@@ -7,8 +7,8 @@ from typing import Any, Dict, List, Optional, Set
 from uuid import UUID, UUID as _UUID, uuid4
 
 from pydantic import BaseModel
-from sqlalchemy import delete, func, literal_column, or_, update
-from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy import delete, func, literal, or_, update
+from sqlalchemy.dialects.postgresql import insert as pg_insert, JSONB
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
@@ -697,7 +697,7 @@ class ProcurementCRUD:
                             "comments": item.comments,
                             "status_history": func.merge_status_history(
                                 VendorQuoteItemDB.status_history,
-                                new_history,
+                                cast(literal(new_history), JSONB),
                             ),
                             "status": QuoteStatus.QUOTED,
                             "updated_at": now,
