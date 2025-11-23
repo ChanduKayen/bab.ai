@@ -397,7 +397,7 @@ async def _prepare_review_response(state: dict, request_id: Optional[str], items
         "sender_id": state.get("sender_id", ""),
         "uuid": state.get("active_material_request_id")
     }
-    encoded_data = quote(json.dumps(data))
+    encoded_data = quote(json.dumps(data, separators=(',', ':')))
     review_order_url = f"{base}?data={encoded_data}"
     # review_url = apis.get_review_order_url(
     #     os.getenv("REVIEW_ORDER_URL_BASE", ""),
@@ -483,7 +483,7 @@ async def _handle_append_workflow(
         "sender_id": state.get("sender_id", ""),
         "uuid": request_id
     }
-    encoded_data = quote(json.dumps(data))
+    encoded_data = quote(json.dumps(data, separators=(',', ':')))
     review_order_url = f"{base}?data={encoded_data}"
 
     state.update(
@@ -1377,7 +1377,7 @@ async def handle_rfq(state: AgentState, crud: ProcurementCRUD, latest_response: 
         "sender_id" : state.get("sender_id", ""),
         "uuid": state["active_material_request_id"]
     }
-    encoded_data = quote(json.dumps(data))
+    encoded_data = quote(json.dumps(data, separators=(',', ':')))
     review_order_url = f"{base}?data={encoded_data}"
     review_order_url_response = """*Choose Vendors and proceed to place order*"""
 
@@ -1419,7 +1419,7 @@ async def handle_order_edit(state: AgentState, crud: ProcurementCRUD, latest_res
         "sender_id": state.get("sender_id", ""),
         "uuid": state.get("active_material_request_id")
     }
-    encoded_data = quote(json.dumps(data))
+    encoded_data = quote(json.dumps(data, separators=(',', ':')))
     review_order_url = f"{base}?data={encoded_data}"
 
     review_order_url_response = "🔎 *Edit your Order Here*"

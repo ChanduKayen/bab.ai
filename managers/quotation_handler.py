@@ -31,14 +31,14 @@ def _quote_summary_url(request_id: str) -> Optional[str]:
 def _vendor_quote_url(request_id: str, vendor_id: str) -> str:
     base = VENDOR_QUOTE_URL_BASE or "https://example.com/vendor/quotes"
     data = {"uuid": request_id, "vendor_id": vendor_id}
-    encoded_data = quote(json.dumps(data))
+    encoded_data = quote(json.dumps(data, separators=(",", ":")))
     return f"{base}?data={encoded_data}"
 
 
 def _vendor_order_url(request_id: str, vendor_id: str) -> str:
     base = VENDOR_ORDER_CONFIRMATION_URL_BASE or "https://example.com/vendor/order"
     data = {"uuid": request_id, "vendor_id": vendor_id}
-    encoded_data = quote(json.dumps(data))
+    encoded_data = quote(json.dumps(data, separators=(",", ":")))
     return f"{base}?data={encoded_data}"
 
 def _vendor_quote_button_param(request_id: str, vendor_id: str) -> str:
