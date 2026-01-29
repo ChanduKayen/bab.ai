@@ -354,21 +354,7 @@ def _last_user_text(state: AgentState) -> str:
     if not state.get("messages"):
         return "" 
     return (state["messages"][-1].get("content") or "").strip()
-
-async def _ainvoke_json(llm, messages):
-    """Prefer JSON-structured responses; fallback to plain if unsupported."""
-    try:
-        bound = llm.bind(response_format={"type": "json_object"})
-        return await bound.ainvoke(messages)
-    except Exception:
-        return await llm.ainvoke(messages)
-
-def _history_snippet(state: AgentState, limit: int = 4) -> str:
-    msgs = state.get("messages") or []
-    if not msgs:
-        return ""
-    hist = msgs[:-1]
-    lines = []
+      
     for m in hist[-limit:]:
         text = (m.get("content") or "").strip()
         if not text:

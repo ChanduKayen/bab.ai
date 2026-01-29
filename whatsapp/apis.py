@@ -364,3 +364,18 @@ async def confirm_order(payload: ConfirmOrderRequest):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
     
+
+@router.get("/procurement/request-items/{sender_id}")
+async def get_request_items_grouped(sender_id: str, limit: int = Query(50, ge=1, le=200)):
+    """
+    Frontend use-case:
+      - show past orders (requests)
+      - each request expands to show its line items
+    """
+    try:
+        async with AsyncSessionLocal() as session:
+            crud = ProcurementCRUD(session)
+            data = await crud.get_items_grouped_by_request_for_sender(sender_id, limit=limit)
+            return {"count": len(data), "groups": data}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))

@@ -13,6 +13,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from sqlalchemy.orm import joinedload
+from collections import defaultdict
 
 from database.models import (
     MaterialRequest,
@@ -1030,3 +1031,52 @@ class ProcurementCRUD:
             await self.session.rollback()
             print("procurement_crud ::::: mark_vendor_confirmation ::::: exception :", e)
             raise
+
+    async def get_items_grouped_by_request_for_sender(self, sender_id: str, limit: int = 50):
+            """
+            Returns:
+            [
+            {
+                "material_request_id": "<uuid>",
+                "items": [ {item_dict}, ... ]
+            },
+            ...
+            ]
+            """
+            stmt = (
+                select(MaterialRequestItem, MaterialRequest)
+                .join(MaterialRequest, MaterialRequest.id == MaterialRequestItem.material_request_id)
+                .where(MaterialRequest.sender_id == sender_id)
+                .order_by(MaterialRequestItem.material_request_id, MaterialRequestItem.created_at)
+            )
+
+            res = await self.session.execute(stmt)
+            rows = res.all()  # list[(MaterialRequestItem, MaterialRequest)]
+
+            grouped = defaultdict(list)
+
+            for item, _req in rows:
+                grouped[str(item.material_request_id)].append({
+                    "id": str(item.id),
+                    "material_request_id": str(item.material_request_id),
+                    "material_name": item.material_name,
+                    "sub_type": item.sub_type,
+                    "dimensions": item.dimensions,
+                    "dimension_units": item.dimension_units,
+                    "quantity": item.quantity,
+                    "quantity_units": item.quantity_units,
+                    "unit_price": item.unit_price,
+                    "status": getattr(item.status, "value", item.status),
+                    "vendor_notes": item.vendor_notes,
+                    "created_at": item.created_at.isoformat() if item.created_at else None,
+                    "updated_at": item.updated_at.isoformat() if item.updated_at else None,
+                })
+
+            # Convert to list (frontend-friendly)
+            payload = [{"material_request_id": rid, "items": items} for rid, items in grouped.items()]
+
+            # Optional: limit number of groups returned (not number of items)
+            if limit and limit > 0:
+                payload = payload[:limit]
+
+            return payload

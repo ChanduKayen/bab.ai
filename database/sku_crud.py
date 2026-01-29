@@ -15,7 +15,9 @@ from utils.sku_normalizer import (
 )
 from database.models import SkuMaster, SkuVendorPrice, MaterialRequestItem
 from sqlalchemy import update as sa_update
-
+from collections import defaultdict
+from sqlalchemy import select
+from database.models import MaterialRequestItem, MaterialRequest
 DEFAULT_SIM_THRESHOLD = 0.12
 
 SEARCH_SQL = text("""
@@ -501,3 +503,5 @@ class SkuCRUD:
             print(f"sku_crud ::::: insert_sku_vendor_quotes ::::: ERROR for sku_id={item.sku_id} : {e}")
             raise
         print(f"sku_crud ::::: insert_sku_vendor_quotes ::::: OK for item_id={item.requested_item_id}")
+
+
