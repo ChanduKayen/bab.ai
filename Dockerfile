@@ -40,5 +40,5 @@ ENV APP_MODULE=app.main:app
 # ENV DB_SSLROOTCERT=/certs/rds-us-east-1-bundle.pem
 
 # Start the server
-CMD exec gunicorn -k uvicorn.workers.UvicornWorker -w 2 \
+CMD exec gunicorn -k uvicorn.workers.UvicornWorker -w 1 --timeout 120 \
     -b 0.0.0.0:${PORT} ${APP_MODULE}
