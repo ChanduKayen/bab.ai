@@ -1408,33 +1408,32 @@ async def handle_credit(state: AgentState, crud: ProcurementCRUD,  uoc_next_mess
     return state 
 
 async def handle_order_edit(state: AgentState, crud: ProcurementCRUD, latest_response: str, uoc_next_message_extra_data=None) -> AgentState:
+     """
+    Handle the RFQ intent by updating the state and returning it.
     """
-    Handle the RFQ edit-order intent by updating the state and returning it.
-    """
-    material_request_id = state.get("active_material_request_id")
-    print("Procurement Agent::::: handle_order_edit:::::  edit order active_material_request_id : ", material_request_id)
+     material_request_id = state["active_material_request_id"] if "active_material_request_id" in state else None
+     print("Procurement Agent::::: handle_rfq:::::  edit order active_materail_request_id : ", material_request_id)
+     review_order_url = apis.get_review_order_url(os.getenv("REVIEW_ORDER_URL_BASE"), {}, {"senderId" : state.get("sender_id", ""), "uuid": state["active_material_request_id"]})
+     review_order_url_response = """🧾 *Review & Checkout*
 
-    base = os.getenv("REVIEW_ORDER_URL_BASE")
-    data = {
-        "sender_id": state.get("sender_id", ""),
-        "uuid": state.get("active_material_request_id")
-    }
-    encoded_data = quote(json.dumps(data, separators=(',', ':')))
-    review_order_url = f"{base}?data={encoded_data}"
+*Your request is ready for review*
 
-    review_order_url_response = "🔎 *Edit your Order Here*"
+Now you may edit your list, and proceed to get quotations from trusted vendors.
 
-    state.update(
+_You’ll be taken to a secure Thirtee page - review your order, compare manufacturers, and request quotations effortlessly._
+     """
+
+     state.update(
         intent="rfq",
         latest_respons=review_order_url_response,
         uoc_next_message_type="link_cta",
         uoc_question_type="procurement_new_user_flow",
         needs_clarification=True,
-        uoc_next_message_extra_data={"display_text": "Review Order", "url": review_order_url},
+        uoc_next_message_extra_data= {"display_text": "Proceed Securely", "url": review_order_url},
         agent_first_run=False
     )
-    print("Procurement Agent::::: handle_order_edit:::::  --Handling order edit intent --")
-    return state
+     print("Procurement Agent::::: handle_rfq:::::  --Handling rfq intent --", state)
+     return state
 
 async def handle_photo_upload_flow(state: AgentState, crud: ProcurementCRUD, uoc_next_message_extra_data=None) -> AgentState:
    
@@ -1470,28 +1469,28 @@ async def handle_photo_upload_flow(state: AgentState, crud: ProcurementCRUD, uoc
     return state
 
 async def handle_followup_on_quotes(state: AgentState, crud: ProcurementCRUD) -> AgentState:
-    """
+     """
     Handle the RFQ intent by updating the state and returning it.
     """
-    material_request_id = state.get("active_material_request_id")
-    print("Procurement Agent::::: handle_followup_on_quotes:::::  active_material_request_id : ", material_request_id)
-    review_order_url = "https://www.thirtee.in"  # Placeholder URL
-    review_order_url_response = """🧾 *Your Quotations dashboard*
+     material_request_id = state["active_material_request_id"] if "active_material_request_id" in state else None
+     print("Procurement Agent::::: handle_rfq:::::  edit order active_material_request_id : ", material_request_id)
+     review_order_url = "https://www.thirtee.in"  # Placeholder URL
+     review_order_url_response = """🧾 *Your Quotations dashboard*
 
 _You will be taken to your dashboard where you can review all your quotations:_
-    """
+     """
 
-    state.update(
+     state.update(
         intent="rfq",
         latest_respons=review_order_url_response,
         uoc_next_message_type="link_cta",
         uoc_question_type="procurement_new_user_flow",
         needs_clarification=True,
-        uoc_next_message_extra_data={"display_text": "Proceed Securely", "url": review_order_url},
+        uoc_next_message_extra_data= {"display_text": "Proceed Securely", "url": review_order_url},
         agent_first_run=False
     )
-    print("Procurement Agent::::: handle_followup_on_quotes:::::  --Handling order edit intent --")
-    return state
+     print("Procurement Agent::::: handle_rfq:::::  --Handling rfq intent --", state)
+     return state
 
 _HANDLER_MAP = {
     "siteops": handle_siteops,
