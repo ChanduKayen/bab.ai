@@ -46,6 +46,7 @@ import os
 import users.user_onboarding_manager as user_onboarding_manager
 from users.user_onboarding_manager import ensure_user_and_state_fields
 from database.models import UserStage
+from typing import Dict, List, Optional
 #This has to be updated accroding to he phone number you are using for the whatsapp business account.
 WHATSAPP_API_URL = "https://graph.facebook.com/v19.0/712076848650669/messages"
 #ACCESS_TOKEN = "EAAIMZBw8BqsgBO4ZAdqhSNYjSuupWb2dw5btXJ6zyLUGwOUE5s5okrJnL4o4m89b14KQyZCjZBZAN3yZBCRanqLC82m59bGe4Rd2BPfRe3A3pvGFZCTf2xB7a6insIzesPDVMLIw4gwlMkkz7NGl3ZBLvP5MU8i3mZBMmUBShGeQkSlAyRhsXJtlsg8uGaAfYwTid8PZAGBKnbOR3LFpCgBD8ZCIMJh9xI0sHWy"  
@@ -60,6 +61,108 @@ MEDIA_DOWNLOAD_DIR = Path(MEDIA_DOWNLOAD_PATH)
 # implementing a presistnace layer to preseve the chat history tha saves the state of messages for followup questions required by UOC manager 
 #r = redis.Redis(host='localhost', port=6379, decode_responses=True)
 memory_store = {}
+PHOTO_DEBOUNCE_SECONDS = float(os.getenv("PHOTO_DEBOUNCE_SECONDS", "5"))
+_media_batch_tasks: Dict[str, asyncio.Task] = {}
+
+
+def _cancel_media_batch_task(sender_id: str) -> None:
+    task = _media_batch_tasks.pop(sender_id, None)
+    if task and not task.done():
+        task.cancel()
+
+
+def _schedule_media_batch_processing(sender_id: str) -> None:
+    async def _runner() -> None:
+        try:
+            await asyncio.sleep(PHOTO_DEBOUNCE_SECONDS)
+            await _process_media_batch(sender_id)
+        except asyncio.CancelledError:
+            return
+        except Exception:
+            logging.exception("Webhook :::::: media batch processing failed")
+        finally:
+            _media_batch_tasks.pop(sender_id, None)
+
+    _cancel_media_batch_task(sender_id)
+    _media_batch_tasks[sender_id] = asyncio.create_task(_runner())
+
+
+async def _flush_media_batch(sender_id: str) -> None:
+    task = _media_batch_tasks.pop(sender_id, None)
+    if task and not task.done():
+        task.cancel()
+    await _process_media_batch(sender_id)
+
+
+async def _process_media_batch(sender_id: str) -> None:
+    state = get_state(sender_id)
+    if not state:
+        return
+    if not state.get("media_batch_pending"):
+        return
+
+    messages = list(state.pop("media_batch_messages", []) or [])
+    state.pop("media_batch_pending", None)
+    state.pop("last_media_at", None)
+
+    if not messages:
+        save_state(sender_id, state)
+        return
+
+    photos: List[Dict[str, str]] = []
+    for item in messages:
+        if item.get("type") != "image":
+            continue
+        media_id = item["image"].get("id")
+        caption = item["image"].get("caption", "")
+        if not media_id:
+            continue
+        path = download_whatsapp_image(media_id)
+        if not path:
+            continue
+        photos.append({"image_path": path, "caption": caption})
+
+    if not photos:
+        save_state(sender_id, state)
+        return
+
+    state["batched_images"] = photos
+    state["batched_photos"] = photos
+    state["image_path"] = photos[0]["image_path"]
+    state["caption"] = photos[0].get("caption", "")
+    state["media_url"] = photos[0]["image_path"]
+    state["media_batch_processing"] = True
+    save_state(sender_id, state)
+
+    contacts = state.get("user_full_name")
+    payload = {
+        "entry": [
+            {
+                "changes": [
+                    {
+                        "value": {
+                            "messages": [messages[0]],
+                            "contacts": [
+                                {
+                                    "profile": {"name": contacts}
+                                }
+                            ],
+                        }
+                    }
+                ]
+            }
+        ]
+    }
+
+    try:
+        await handle_whatsapp_event(payload)
+    finally:
+        fresh_state = get_state(sender_id) or state
+        fresh_state.pop("media_batch_processing", None)
+        fresh_state.pop("media_batch_messages", None)
+        fresh_state.pop("media_batch_pending", None)
+        fresh_state.pop("last_media_at", None)
+        save_state(sender_id, fresh_state)
 
 def get_state(sender_id: str): 
     print("Webhook :::::: get_state::::: Getting state for sender_id:", sender_id)
@@ -392,7 +495,8 @@ async def handle_whatsapp_event(data: dict):
         if "messages" not in entry:
             logger.info("No messages found in the entry.")
             return {"status": "ignored", "reason": "No messages found"}
-        msg = entry["messages"][0]
+        messages = entry.get("messages") or []
+        msg = messages[0]
         inbound_wamid = msg.get("id")
         sender_id = msg["from"]
         msg_type = msg["type"]
@@ -456,6 +560,32 @@ async def handle_whatsapp_event(data: dict):
             print("Webhook :::::: user upsert failed:", e)
         role = await user_onboarding_manager.get_user_role(session, sender_id=sender_id)
         state["user_category"] = role 
+
+        is_batch_processing = state.get("media_batch_processing", False)
+
+        if len(messages) > 1 and not is_batch_processing:
+            pending = list(state.get("media_batch_messages") or [])
+            for extra_msg in messages[1:]:
+                if extra_msg.get("type") == "image":
+                    pending.append(extra_msg)
+            if pending:
+                state["media_batch_messages"] = pending
+
+        if state.get("media_batch_pending") and not is_batch_processing and msg_type not in ("image", "document"):
+            await _flush_media_batch(sender_id)
+            state = get_state(sender_id) or state
+            is_batch_processing = state.get("media_batch_processing", False)
+
+        if msg_type == "image" and not is_batch_processing:
+            pending = list(state.get("media_batch_messages") or [])
+            pending.append(msg)
+            state["media_batch_messages"] = pending
+            state["media_batch_pending"] = True
+            state["last_media_at"] = time.time()
+            save_state(sender_id, state)
+            _schedule_media_batch_processing(sender_id)
+            return {"status": "media_batch_scheduled"}
+
         if msg_type == "text":
             text = msg["text"]["body"]
             state["messages"].append({"role": "user", "content": text})
@@ -464,9 +594,14 @@ async def handle_whatsapp_event(data: dict):
         elif msg_type == "image":
             media_id = msg["image"]["id"]
             caption = msg["image"].get("caption", "")
-        
-            image_path = download_whatsapp_image(media_id)
-            print("Webhook :::::: whatsapp_webhook::::: Image downloaded, path:", image_path)
+
+            if state.get("media_batch_processing") and state.get("image_path"):
+                image_path = state["image_path"]
+                print("Webhook :::::: whatsapp_webhook::::: Using preloaded image path:", image_path)
+            else:
+                image_path = download_whatsapp_image(media_id)
+                print("Webhook :::::: whatsapp_webhook::::: Image downloaded, path:", image_path)
+
             state["messages"].append({
                 "role": "user",
                 "content": f"[Image ID: {media_id}] {caption}"  # Or you could pass separately
@@ -476,8 +611,8 @@ async def handle_whatsapp_event(data: dict):
             state["caption"] = caption
             state["msg_type"] = "image"
             state["media_url"] = image_path
-        
-            print("Webhook :::::: whatsapp_webhook::::: Image downloaded and saved at:", image_path)
+
+            print("Webhook :::::: whatsapp_webhook::::: Image ready at:", image_path)
         elif msg_type == "interactive":
             interactive_type = msg["interactive"]["type"]
             if interactive_type == "button_reply":
