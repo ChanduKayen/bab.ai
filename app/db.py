@@ -52,7 +52,12 @@ def _ssl_args_for_postgres() -> dict:
 
 def get_engine() -> AsyncEngine:
     url = get_db_url(Settings())
-    # ...
+    url = _normalize_url(url)
+    
+    # Remove query string to avoid asyncpg kwarg conflict (e.g. sslmode=...)
+    if "?" in url:
+        url = url.split("?")[0]
+
     kwargs = {}
     if url.startswith("postgresql+asyncpg://"):
         # fail faster if network is wrong
