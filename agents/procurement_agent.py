@@ -6,7 +6,6 @@ from typing import List
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import SystemMessage, HumanMessage
 from managers.uoc_manager import UOCManager
-from whatsapp.builder_out import whatsapp_output
 import os
 from managers.procurement_manager import ProcurementManager
 from models.chatstate import AgentState
@@ -20,7 +19,8 @@ from urllib.parse import quote
 
 from app.db import get_sessionmaker
 AsyncSessionLocal = get_sessionmaker()
-
+from  users.user_onboarding_manager import set_user_role 
+from users import user_onboarding_manager
 from whatsapp import apis
 from whatsapp.builder_out import whatsapp_output
 from agents.credit_agent import run_credit_agent
@@ -34,7 +34,6 @@ from pathlib import Path
 # -----------------------------------------------------------------------------
 load_dotenv()  # lodad environment variables from .env file
 #llm = ChatOpenAI(model="gpt-4", temperature=0)
-PHONE_NUMBER_ID = os.getenv("PHONE_NUMBER_ID")
 ACCESS_TOKEN = os.getenv("WHATSAPP_ACCESS_TOKEN")
 upload_dir_value = os.getenv("DEFAULT_UPLOAD_DIR")
 if not upload_dir_value:
@@ -193,7 +192,7 @@ def _last_two_user_msgs(state: dict) -> tuple[str, str]:
 # External (WABA) Utility
 # -----------------------------------------------------------------------------
 def upload_media_from_path( file_path: str, mime_type: str = "image/jpeg") -> str:
-    url = f"https://graph.facebook.com/v19.0/{PHONE_NUMBER_ID}/media"
+    url = f"https://graph.facebook.com/v19.0/712076848650669/media"
     headers = {"Authorization": f"Bearer {ACCESS_TOKEN}"}
     files = {"file": (os.path.basename(file_path), open(file_path, "rb"), mime_type)}
     data = {"messaging_product": "whatsapp"}
@@ -206,20 +205,17 @@ def upload_media_from_path( file_path: str, mime_type: str = "image/jpeg") -> st
 # Context Helpers
 # -----------------------------------------------------------------------------
 CHIT_CHAT_PROMPT = """
-You are Bab.ai — a witty, warm WhatsApp assistant for builders.
-When the user chit-chats, respond in ONE short, magical-sounding line
-that feels gentle, sometimes lightly funny, and shows you’re capable
-of handling both casual talk and serious material orders. 
-Seamlessly guide the reply back toward the user’s last context 
-(e.g., materials, quantities, delivery, or procurement flow).
-
-Constraints:
-- ≤120 characters
-- At most one emoji
-- No markdown, no bullet points
-- No PII requests
-- Must feel like a natural continuation, not a reset
-Return ONLY the sentence.
+"You are Thirtee  — a smart, friendly WhatsApp assistant built for builders and construction professionals. "
+    "Read the conversation trail carefully and reply in the same language and tone as the user. "
+    "Be natural, concise (1–2 short sentences, ≤120 characters, max one emoji), and sound like a trusted teammate on site. "
+    "Your primary role is to help builders share their material requirements — by explaining them what you can do and what they can do"
+    "and then collect the best quotations from trusted OEMs, distributors, and manufacturers. "
+    "Whenever relevant, smoothly guide the conversation toward useful actions like sharing a requirement, "
+    "checking prices, or exploring pay-later credit for materials. " 
+    "Explain Thirtee ’s abilities in a helpful, human tone — never like a sales pitch. "
+    "Keep every response warm, context-aware, and conversational. "
+    "If the topic is off-track, gently bring the user back by reminding how Thirtee  can assist with procurement or credit. "
+    "Never ask for sensitive personal data unless the user is clearly in a verified credit/KYC flow."
 """
 
 async def handle_chit_chat(state: dict, llm: ChatOpenAI | None = None) -> dict:
@@ -258,12 +254,12 @@ async def handle_chit_chat(state: dict, llm: ChatOpenAI | None = None) -> dict:
     state["needs_clarification"] = True
     state["last_known_intent"] = "procurement"  # keep lane sticky
     state["uoc_next_message_extra_data"] = [
-        {"id": "rfq", "title": "📎 Upload BOQ/Photo"},
-        {"id": "credit_use", "title": "⚡ Buy with Credit"},
+        {"id": "guided_photo_upload", "title": "📷 Share Requirement"},
+       # {"id": "credit_use", "title": "⚡ Buy with Credit"},
     ]
    
     return state
-async def handle_help(state: AgentState) -> AgentState:
+async def handle_help(state: AgentState, crud: ProcurementCRUD, uoc_next_message_extra_data=None) -> AgentState:
     """
     Handle the help intent — sends tutorial MP4 as header and useful CTAs.
     """
@@ -271,8 +267,8 @@ async def handle_help(state: AgentState) -> AgentState:
 
     try:
         # Path to your ready MP4 file
-        media_path = r"C:\Users\vlaks\OneDrive\Desktop\Bab.ai\Marketing\Quotations_tutorial.mp4"
-        
+        media_path = r"C:/Users/koppi/OneDrive/Desktop/Thirtee/Marketing/Quotations_tutorial.mp4"
+
         # Upload to WABA
         media_id = upload_media_from_path(media_path, mime_type="video/mp4")
 
@@ -285,12 +281,12 @@ async def handle_help(state: AgentState) -> AgentState:
             intent="help",
             latest_respons=help_message,
             uoc_next_message_type="button",
-            uoc_question_type="procurement_help",
+            uoc_question_type="procurement_new_user_flow",
             needs_clarification=True,
             uoc_next_message_extra_data={
                 "buttons": [
-                    {"id": "procurement", "title": "🧱 Request Material"},
-                    {"id": "credit_use", "title": "💳 Use Credit"},
+                    {"id": "procurement", "title": "📷 Share Requirement"},
+                   # {"id": "credit_use", "title": "💳 Use Credit"},
                     {"id": "main_menu", "title": "🏠 Main Menu"}
                 ],
                 "media_id": media_id,
@@ -304,7 +300,7 @@ async def handle_help(state: AgentState) -> AgentState:
         state.update(
             latest_respons="Sorry, I couldn't fetch the tutorial right now. Please try again later.",
             uoc_next_message_type="plain",
-            uoc_question_type="procurement_help",
+            uoc_question_type="procurement_new_user_flow",
             needs_clarification=True
         )
 
@@ -318,7 +314,7 @@ async def extract_materials(text: str = "", img_b64: str = None) -> list:
     backoff_base = 0.6
 
     sys_prompt = """
-You are Bab.ai, an expert AI for construction procurement.
+You are Thirtee , an expert AI for construction procurement.
 
 Your ONLY job: extract construction material line items into a clean JSON array.
 
@@ -387,7 +383,7 @@ Rules:
                 items = [parsed]
 
         elif isinstance(parsed, list):
-            items = parsed
+            items = parsed 
 
         else:
             items = []
@@ -507,7 +503,7 @@ async def handle_rfq(state: AgentState, crud: ProcurementCRUD, latest_response: 
     )
     print("Procurement Agent::::: handle_rfq:::::  --Handling rfq intent --", state)
     return state
-
+ 
 async def handle_credit(state: AgentState, crud: ProcurementCRUD,  uoc_next_message_extra_data=None) -> AgentState:
     """
     Handle the credit intent by updating the state and returning it.
@@ -551,15 +547,74 @@ async def handle_order_edit(state: AgentState, crud: ProcurementCRUD, latest_res
     print("Procurement Agent::::: handle_order_edit:::::  --Handling order edit intent --")
     return state
 
+async def handle_photo_upload_flow(state: AgentState, crud: ProcurementCRUD, uoc_next_message_extra_data=None) -> AgentState:
+   
+    # If no image yet, nudge to upload and keep the flow “open”
+    if not state.get("image_path"):
+        user_name = state.get("user_full_name", "there")
+        state.update(
+            intent="procurement",
+            latest_respons=(
+                f"Great! Please share your requirement here.\n"
+                "📷 A photo of material list, handwritten notes, or even your voice note works perfect."
+            ), 
+            uoc_next_message_type="plain",
+            uoc_question_type="procurement_new_user_flow",
+            uoc_next_message_extra_data=[],
+            needs_clarification=True,
+            # Keep this True so new_user_flow treats the very next inbound (image) as first-run extraction
+            agent_first_run=True,
+            last_known_intent="procurement"
+        )
+        return state
+
+    # If an image already arrived (edge case), just fall back to new_user_flow path
+    # by not sending anything new; keep agent_first_run=True so extraction kicks in.
+    state.update(
+        intent="procurement",
+        uoc_question_type="procurement_new_user_flow",
+         uoc_next_message_extra_data=[],
+        needs_clarification=True,
+        agent_first_run=True,
+        last_known_intent="procurement"
+    )
+    return state
+
+async def handle_followup_on_quotes(state: AgentState, crud: ProcurementCRUD) -> AgentState:
+    """
+    Handle the RFQ intent by updating the state and returning it.
+    """
+    material_request_id = state.get("active_material_request_id")
+    print("Procurement Agent::::: handle_followup_on_quotes:::::  active_material_request_id : ", material_request_id)
+    review_order_url = "https://www.thirtee.in"  # Placeholder URL
+    review_order_url_response = """🧾 *Your Quotations dashboard*
+
+_You will be taken to your dashboard where you can review all your quotations:_
+    """
+
+    state.update(
+        intent="rfq",
+        latest_respons=review_order_url_response,
+        uoc_next_message_type="link_cta",
+        uoc_question_type="procurement_new_user_flow",
+        needs_clarification=True,
+        uoc_next_message_extra_data={"display_text": "Proceed Securely", "url": review_order_url},
+        agent_first_run=False
+    )
+    print("Procurement Agent::::: handle_followup_on_quotes:::::  --Handling order edit intent --")
+    return state
+
 _HANDLER_MAP = {
     "siteops": handle_siteops,
     "procurement": handle_procurement,
     "main_menu": handle_main_menu,
     "rfq": handle_rfq,
     "credit_use": handle_credit,
-    "edit_order": handle_order_edit
+    "edit_order": handle_order_edit,
+    "guided_photo_upload": handle_photo_upload_flow,
+    "help": handle_help,
 }
-
+ 
 # -----------------------------------------------------------------------------
 # Orchestration Flows
 # -----------------------------------------------------------------------------
@@ -648,9 +703,13 @@ async def new_user_flow(state: AgentState, crud: ProcurementCRUD  ) -> AgentStat
         if(last_msg == ""):
             print("Procurement Agent:::: new_user_flow : last_msg is empty and no image, setting up welcome message")
             greeting_message = (
-                f"👋 Hi {user_name}! I'm your procurement assistant.\n"
-                "I can help you get quotes and manage your construction material orders.\n\n"
-                "What would you like to do?"
+"I’ll help you connect directly with manufacturers\n\n"
+"Here’s how it works:\n"
+"1️⃣ Share a photo or BOQ of your material requirement.\n"
+"2️⃣ Thirtee collects quotations directly from OEMs & distributors.\n"
+"3️⃣ You compare and choose the best offer.\n"
+"4️⃣ (Optional) Use Pay-Later Credit for easy purchase 💳\n\n"
+"What would you like to do now?"
             )
            
             state["latest_respons"] = greeting_message
@@ -661,9 +720,10 @@ async def new_user_flow(state: AgentState, crud: ProcurementCRUD  ) -> AgentStat
             state["agent_first_run"] = False
             state["user_verified"] = True
             state["uoc_next_message_extra_data"] = [
-                {"id": "procurement_start", "title": "🧱 Request Material"},
+                {"id": "guided_photo_upload", "title": "📷 Share Requirement"},
                 {"id": "main_menu", "title": "🏠 Main Menu"},
             ]
+            print("Procurement Agent:::: new_user_flow : welcome message set up completed", state)
             return state
              
         else:
@@ -676,7 +736,7 @@ async def new_user_flow(state: AgentState, crud: ProcurementCRUD  ) -> AgentStat
 
             print("Procurement Agent:::: new_user_flow : combined text:", combined)
  
-            # PREMIUM WAIT FLOW: one instant receipt + one heartbeat if still processing
+            # WAIT FLOW: one instant receipt + one heartbeat if still processing
             items = await run_with_engagement(
                 sender_id=sender_id,
                 work_coro=extract_materials(combined, img_b64),
@@ -687,7 +747,7 @@ async def new_user_flow(state: AgentState, crud: ProcurementCRUD  ) -> AgentStat
         print("Procurement Agent:::: new_user_flow : extracted materials:", state["procurement_details"]["materials"])
         
         try:
-            async with AsyncSessionLocal() as session:
+            async with AsyncSessionLocal() as session: 
                 procurement_mgr = ProcurementManager(session)
             print("Procurement Agent:::: new_user_flow :::: calling persist_procurement for material : ", state["procurement_details"]["materials"])
             await procurement_mgr.persist_procurement(state)
@@ -697,53 +757,60 @@ async def new_user_flow(state: AgentState, crud: ProcurementCRUD  ) -> AgentStat
             print("Procurement Agent:::: new_user_flow : Error in persist_procurement:", e)
             state["latest_respons"] = "Sorry, there was an error saving your procurement request. Please try again later."
             return state
+        
         try:  
-            
-            review_order_url_response = f"""*Your request is ready.*
 
-Please review unclear items before continuing.
+            review_order_url_response = f"""*Your request is ready for review*
 
-_Next, choose an action:_
-            
+*Summary:* Requested {len(items)} materials.
+
+Now you may edit your list, and proceed to get quotations from trusted vendors.
+
+
             """
-           
-            path = generate_review_order_card(
-                out_dir=str(UPLOAD_IMAGES_DIR),
-                variant="waba_header2x",  # 1600x836 (2x 800x418)
-                brand_name="bab-ai.com Procurement System",
-                brand_pill_text="Procurement",
-                heading="Review Order",
-                site_name="AS Elite, Kakinada",
-                order_id="MR-08A972B5",
-                items_count_text="3 materials",
-                delivery_text="Fri, 22 Aug",
-                quotes_text="3 in (best ₹—)",
-                payment_text="Credit available",
-                items=items,
-                total_value="₹ 3,45,600",
-                total_subnote="incl. GST • freight extra",
-                quotes_ready_count=3,
-            )
+           # Holding the image generation part here
+            # path = generate_review_order_card(
+            #     out_dir=str(UPLOAD_IMAGES_DIR),
+            #     variant="waba_header2x",  # 1600x836 (2x 800x418)
+            #     brand_name="bab-ai.com Procurement System",
+            #     brand_pill_text="Procurement",
+            #     heading="Review Order",
+            #     site_name="AS Elite, Kakinada",
+            #     order_id="MR-08A972B5",
+            #     items_count_text="3 materials",
+            #     delivery_text="Fri, 22 Aug",
+            #     quotes_text="3 in (best ₹—)",
+            #     payment_text="Credit available",
+            #     items=items,
+            #     total_value="₹ 3,45,600",
+            #     total_subnote="incl. GST • freight extra",
+            #     quotes_ready_count=3,
+            # )
 
-            media_id = upload_media_from_path( path, "image/jpeg")
+            # media_id = upload_media_from_path( path, "image/jpeg")
+            await handle_order_edit(state, crud, latest_response="", uoc_next_message_extra_data=None)
 
-            state.update({  
-                "latest_respons": review_order_url_response,
-                "uoc_next_message_type": "button",
-                "uoc_question_type": "procurement_new_user_flow",
-                #"uoc_next_message_extra_data": {"display_text": "Review Order", "url": review_order_url},
-                "uoc_next_message_extra_data": {"buttons":  [
-                     {"id": "edit_order", "title": "Edit Order"},
-                    {"id": "rfq", "title": "Confirm & Get Quotes"},
-                    {"id": "credit_use", "title": "Buy with Credit"},
-                ],
-                "media_id": media_id,
-                "media_type": "image",
-                },
-                "needs_clarification": True,
-                "active_material_request_id": state["active_material_request_id"],
-                "agent_first_run": False,
-            })
+            #Skipping this below step to directly provide the edit link
+
+        #     state.update({
+        #         "latest_respons": review_order_url_response,
+        #         "uoc_next_message_type": "button",
+        #         "uoc_question_type": "procurement_new_user_flow",
+        #         #"uoc_next_message_extra_data": {"display_text": "Review Order", "url": review_order_url},
+        #         "uoc_next_message_extra_data": {"buttons":  [
+        #              {"id": "edit_order", "title": "Review & Confirm →"},
+        #              {"id": "help", "title": "What is this? 🤔"},
+        #             #{"id": "rfq", "title": "Confirm & Get Quotes"},
+        #             #{"id": "credit_use", "title": "Buy with Credit"},
+        #         ]
+        #         #,
+        #         #"media_id": media_id,   --Temporarily disabling content media
+        #         #"media_type": "image",
+        #         },
+        #         "needs_clarification": True,
+        #         "active_material_request_id": state["active_material_request_id"],
+        #         "agent_first_run": False,
+        #     })
         except Exception as e:
             print("Procurement Agent:::: new_user_flow : Error in fetching review order:", e)
         
@@ -759,12 +826,14 @@ _Next, choose an action:_
                                           {"id": "procurement", "title": "⚡ Get Quick Quotes"},
                                           {"id": "credit",      "title": "💳 Get Credit Now"}] 
                 return await _HANDLER_MAP[last_msg](state, crud, uoc_next_message_extra_data)
-            else: 
+        else: 
                 print("Procurement Agent:::: new_user_flow : last_msg is not main_menu, handling it as a specific intent")
                 state["last_known_intent"] = "procurement"
+                #if the intent is procurment, then call the run procuremrnt agent again with first run set to true. 
                 state = await route_and_respond(state)
                 return state
-            
+        
+        ###########################################    
         latest_msg_intent= state["intent"]
         latest_msg_context = state["intent_context"]
 
@@ -830,176 +899,7 @@ async def collect_procurement_details_interactively(state: dict) -> dict:
     # SYSTEM PROMPT — clear strategy, clarify vague input, ask for missing info
     system_prompt = (
                 """
-        You are a **smart, friendly procurement assistant** who speaks in a soft, warm tone. You're here to **gently guide users** through placing construction material requests — whether they start with a casual message, upload a photo, or provide structured input.
-
-        ---------------------------
-        Known Procurement Details:
-        ---------------------------
-        <insert JSON-dump of state["procurement_details"]>
-
-        =================== GOAL ===================
-        Help the user complete a material procurement request with these fields:
-        - Material name (brand/type like "ACC Cement", "Vizag TMT")
-        - Sub-type or grade (e.g., "OPC 53", "Fly Ash", "53 Grade")
-        - Dimensions (e.g., "20", "4x8", "10", "50")
-        - Dimension unit (e.g., mm, kg, inch, ft)
-        - Quantity (numeric or range like 100, 50, 10–20)
-        - Quantity unit (e.g., units, bags, tons, meters)
-        - Delivery urgency/date
-        - Preferred vendor (or "Any")
-        - Optional notes
-
-        You may get:
-        - Vague text: “Need cement and TMT”
-        - Structured lists: “Vizag TMT 8mm – 200 kg, Deccan OPC – 50 bags”
-        - Mixed messages over multiple replies
-        - Photos (BOQ, handwritten notes, invoices)
-
-        ================ EXAMPLE SCENARIO ================
-
-        🧾 **1. Text-Only Message (Partial Info):**
-        User: “Need Vizag TMT and ACC cement”
-        
-        You reply warmly:
-        
-        Got it! Just checking:
-        - Vizag TMT: what size (e.g., 8mm, 10mm)? And how many kg?
-        - ACC Cement: is it OPC 53 Grade or something else? How many bags?
-
-        Example:
-        - Vizag TMT 10mm – 300 kg
-        - ACC OPC 53 – 50 bags
-        
-
-        🖼 **2. Photo of Material List:**
-        You detect image + caption, extract known materials:
-        
-        Looks like you need:
-        1. Deccan TMT 20mm – 150 units
-        2. ACC Cement OPC 53 Grade – 50 bags
-
-        Shall I proceed with these? Or would you like to adjust quantities or specs?
-        
-
-        📋 **3. Structured Entry Already Present:**
-        If all fields are present and clear:
-        
-        Here’s what I have so far:
-        - Deccan Cement OPC 53 – 50 kg – 40 bags
-        - Vizag TMT 8mm – 200 kg
-        - CenturyPly Plywood 8 ft × 3½ ft × 2 in – 20 sheets
-
-        ✅ Confirm to proceed or let me know if you'd like to edit anything.
-        
-
-        🕒 **4. Missing Delivery Info:**
-        
-        When would you like these materials delivered?
-
-        For example:
-        - “ASAP”
-        - “Within 2 days”
-        - “Before Friday”
-        
-
-        🛍 **5. Vendor Selection:**
-        
-        Do you have a preferred vendor?
-
-        You can say:
-        - “Srinivas Traders”
-        - “Any” — and I’ll fetch quotes from available suppliers.
-        
-
-        🧠 **6. Confusing Response:**
-        If the message is unclear:
-        
-        Hmm… I didn’t quite get that. Could you help me with a few more details?
-
-        For example:
-        - "Vizag TMT 10mm – 200 kg"
-        - "ACC OPC 53 Cement – 50 bags"
-        
-
-        ================ STRATEGY ================
-        1. Speak warmly and professionally. Be empathetic and clear.
-        2. Ask ONE thing at a time unless summarizing.
-        3. If any material is unclear to you, may be you can try to find out the category of the material based on name or dimensions, and try to extract the material name and quantity from it.
-        4. Most general types of construction materials are:
-            - Cement (OPC, PPC, etc.)
-            - TMT Bars (Deccan TMT, Vizag TMT, etc.)
-            - Aggregates (Coarse, Fine, etc.)
-            - Bricks (Red, Fly Ash, etc.)
-            - Sand (River, Manufactured, etc.)
-            - Plumbing Materials (Pipes, Fittings, etc.)
-            - Electrical Materials (Wires, Switches, etc.)
-            - Paints (Interior, Exterior, etc.)
-            - Roofing Materials (Tiles, Sheets, etc.)
-            - Flooring Materials (Tiles, Marble, etc.)
-            - Hardware (Doors, Windows, etc.)
-            - Miscellaneous (Tools, Safety Gear, etc.)
-            - Carpentry Materials (Wood, Plywood, etc.)
-            - Glass (Float, Toughened, etc.)
-            - Insulation Materials (Thermal, Acoustic, etc.)
-            - Waterproofing Materials (Membranes, Coatings, etc.)
-            - Scaffolding Materials (Planks, Props, etc.)
-        5. Based on the above types, you can try to extract the material name and quantity from the text or image.
-        6. Use buttons where helpful (like "ASAP", "Any vendor", "Confirm Order").
-        7. Be patient. Never rush the user.
-        8. Give concrete examples always.
-        9. Assume the user has minimal context — make it simple.
-        10. Use might provide data in text or image in English or Telugu, Don't translate, extract as-is.
-        11. You should be able to understand written Telugu or English, but do not translate it. Just extract the material details as-is. 
-         
-        ============= OUTPUT FORMAT ============
-        At the end of every interaction, respond ONLY in this strict JSON format:
-
-        {
-          "latest_respons": "<your next WhatsApp message here>",
-          "next_message_type": "button",      // 'plain' for text-only, 'button' for interactive options
-          "next_message_extra_data": [        // optional — only if next message has buttons
-            { "id": "<kebab-case-id>", "title": "<Short Button Title ≤20 chars>" }
-          ],
-          "procurement_details": {
-            "materials": [
-              {
-                "material": "ACC Cement",
-                "sub_type": "OPC 53 Grade",
-                "dimensions": "50",
-                "dimension_units": "kg",
-                "quantity": 40,
-                "quantity_units": "bags"
-              },
-              {
-                "material": "Vizag TMT",
-                "dimensions": "8",
-                "dimension_units": "mm",
-                "quantity": 200,
-                "quantity_units": "kg"
-              }
-            ],
-            "delivery_date": "2025-07-29",
-            "vendor": "Any"
-          },
-          "uoc_confidence": "low",     // set to "high" only when all needed fields are present
-          "uoc_question_type": "procurement"
-        }
-        
-        At the end of your reasoning, ALWAYS respond in this exact JSON format:
-            {
-              "latest_respons": "<your next WhatsApp message here>",
-              "next_message_type": "button",  // 'plain' for text-only, 'button' for buttons
-              "next_message_extra_data": [{ "id": "<kebab-case>", "title": "<≤20 chars>" }, "{ "id": "<kebab-case>", "title": "<≤20 chars>" }", "{ "id": "main_menu", "title": "📋 Main Menu" }],
-              "procurement_details": { <updated procurement_details so far> },
-              "needs_clarification": true,  // false if user exited
-              "uoc_confidence": "low",      // 'high' only when structure is complete
-              "uoc_question_type": "procurement"
-            }
-
-        =============== RULES =================
-        - DO NOT include markdown or formatting syntax.
-        - DO NOT wrap the JSON in  or markdown fences.
-        - Output ONLY the raw JSON above, nothing else.
+You are Thirtee , an expert AI procurement assistant for construction professionals.
         """
 
     )
@@ -1072,7 +972,6 @@ async def collect_procurement_details_interactively(state: dict) -> dict:
            
     
     return state
-
 # -----------------------------------------------------------------------------
 # Vendor Outreach
 # -----------------------------------------------------------------------------
@@ -1123,12 +1022,16 @@ async def run_procurement_agent(state: dict,  config: dict) -> dict:
         state["latest_respons"] = "Sorry, there was a system error. Please try again later."
         return state
     
+    
+
+            
     last_msg = state["messages"][-1]["content"] if state.get("messages") else ""
     print("Procurement Agent:::: run_procurement_agent : last_msg:", last_msg)     
+
+
     user_stage = state.get("user_stage", {})
     print("Procurement Agent:::: run_procurement_agent : user_stage:", user_stage)
-
-      
+    
     intent_context = state.get("intent_context","")
     if intent_context.lower() == "chit-chat":
          print("Procurement Agent:::: run_procurement_agent : The user is trying to chit-chat")
@@ -1137,13 +1040,78 @@ async def run_procurement_agent(state: dict,  config: dict) -> dict:
          return state
     if intent_context.lower() == "help":
          print("Procurement Agent:::: run_procurement_agent : The user is trying to get help")
-         state = await handle_help(state)
+         state = await handle_help(state, crud, [])
+         state["intent_context"]="" #clear context after consuming it 
+         return state
+    if intent_context.lower() == "start_order" or intent_context.lower() == "upload":
+         print("Procurement Agent:::: run_procurement_agent : The user is trying to start order")
+         state["agent_first_run"] = True #so that the flow starts from beginning
+         state = await new_user_flow(state, crud)
+         state["intent_context"]="" #clear context after consuming it 
+         return state
+    if intent_context.lower() == "quote_followup" or intent_context.lower() == "status":
+         print("Procurement Agent:::: run_procurement_agent : The user is trying to follow up on quote requests")
+         state = await handle_followup_on_quotes(state, crud)
          state["intent_context"]="" #clear context after consuming it 
          return state
         # ---------- 0 · Button click (id) ---------------------------
     if last_msg.lower() in _HANDLER_MAP:
         return await _HANDLER_MAP[last_msg.lower()](state,  config, state.get("uoc_next_message_extra_data", []))
+    elif last_msg.lower() == "builder_user" or last_msg.lower() == "vendor_user":
+        state["user_category"] = "builder" if last_msg.lower() == "builder_user" else "vendor"
+        print(f"Procurement Agent:::: run_procurement_agent : User category set to {state['user_category']}")
+        try:
+            async with AsyncSessionLocal() as session:
+                    #crud = ProcurementCRUD(session)
+                    await user_onboarding_manager.set_user_role(session, sender_id= state.get("sender_id", ""), role= state["user_category"])
 
+        except Exception as e:
+            print("Procurement Agent:::: run_procurement_agent : failed to update user category in DB:", e)
+            state["latest_respons"] = "Sorry, there was a system error. Please try again later."
+        
+        state["uoc_next_message_type"] = "button"
+        state["uoc_question_type"] = "procurement_new_user_flow"
+        if state["user_category"] == "builder":
+            state["latest_respons"] = """👋 *Welcome to Thirtee, Builder!*  
+Here I help builders like you connect with manufacturers effortlessly, instantly, and right at your fingertips.
+
+You’re now set up as a *Builder*. Let’s get your first requirement rolling.
+            """
+            state["uoc_next_message_extra_data"] = [
+                {"id": "guided_photo_upload", "title": "📷 Share Requirement"}
+            ]
+            state["needs_clarification"] = True
+            
+        else:
+            state["latest_respons"] = """👋 *Welcome to Thirtee!* — where vendors connect directly with builders"""
+            state["uoc_question_type"] = "vendor_new_user_flow"
+            state["uoc_next_message_extra_data"] = [
+                {"id": "vendor_onboarding", "title": "🏭 Vendor Onboarding"}
+            ]
+        state["needs_clarification"] = True
+        return state
+    #########Identifiying user category###################
+    if state.get("user_category", "") == None or state.get("user_category", "") == "USER":
+        print("Procurement Agent:::: run_procurement_agent : User category not set")
+        message = """👋 *Hola!* I am Thirtee, your smart assistant for construction procurement and credit.
+
+Before we proceed would you let me know if you are a *Builder* looking for materials or a *Supplier* supplying them?
+
+_This information helps me personalise your experience_"""
+
+        state["latest_respons"] = message
+        state["uoc_next_message_type"] = "button"
+        state["uoc_question_type"] = "procurement_new_user_flow"
+        state["needs_clarification"] = True
+        state["uoc_next_message_extra_data"] = [
+            {"id": "builder_user", "title": "👷‍♂️ I'm a Builder"},
+            {"id": "vendor_user", "title": "🏭 I'm a Supplier"},
+        ]
+        # whatsapp_output(state.get("sender_id", ""), message, message_type="button",extra_data= [
+        #     {"id": "builder_user", "title": "👷‍♂️ Builder"},
+        #     {"id": "vendor_user",  "title": "🏭 Supplier"},
+        # ])
+        return state
     try:
         async with AsyncSessionLocal() as session:
             procurement_mgr = ProcurementManager(session)

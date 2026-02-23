@@ -16,22 +16,23 @@ _llm = ChatOpenAI(model="gpt-4o-mini", temperature=0, openai_api_key=os.getenv("
 ALLOWED = {
   "procurement": [
     "start_order",        # ask/confirm materials, qty, units, location, need-by
-    "order_followup",     # track / modify / compare / issue — all post-order actions
+    "quote_followup",     # track / modify / compare / issue — all post-quote actions
+    #"status",             # track order status by order ID
     "upload",             # photo/invoice/BOQ intake that drafts an order
     "help"                # quick Qs about process/pricing without details yet
   ],
-  "credit": [
-    "limit_or_kyc",       # check eligibility/limit or start KYC (same entry path)
-    "pay_vendor",         # make/arrange vendor payment
-    "status_or_repay",    # application status / statement / repayment info
-    "help"
-  ],
-  "siteops": [
-    "setup",              # create/select site (name + location)
-    "progress",           # log progress / upload photo (same entry path)
-    "summary",            # risks/follow-ups / site summary
-    "help"
-  ],
+#   "credit": [
+#     "limit_or_kyc",       # check eligibility/limit or start KYC (same entry path)
+#     "pay_vendor",         # make/arrange vendor payment
+#     "status_or_repay",    # application status / statement / repayment info
+#     "help"
+#   ],
+#   "siteops": [
+#     "setup",              # create/select site (name + location)
+#     "progress",           # log progress / upload photo (same entry path)
+#     "summary",            # risks/follow-ups / site summary
+#     "help"
+#   ],
   "ambiguous": ["help", # unclear but meaningful inetent realted ot bab-ai; router uses last_known_intent
                 "chit-chat" # unrealted chatter
                 ]   
@@ -44,7 +45,8 @@ _JSON_ANY = re.compile(r"\{.*?\}", re.S)
 REQUIRED_SLOTS = {
   # Procurement
   ("procurement","start_order"):   ["materials","quantity","units","location","needed_by_date"],
-  ("procurement","order_followup"):["order_id"],
+  ("procurement","quote_followup"):["order_id"],
+  #("procurement","status"):  ["order_id"],
   ("procurement","upload"):        ["doc_present","doc_type"],   # {"photo","invoice","boq","other"}
   ("procurement","help"):          [],
 
@@ -117,7 +119,7 @@ TEMPLATES = {
         "buttons": [{"id":"credit_limit","title":"📈 Check Limit"}],
     },
     ("credit","vendor_payment"): {
-        "text": "💸 Pay a vendor via Bab.ai Credit. Share *vendor, amount, order ID*.",
+        "text": "💸 Pay a vendor via Thirtee  Credit. Share *vendor, amount, order ID*.",
         "buttons": [{"id":"credit_pay","title":"💳 Pay Vendor"}],
     },
     ("credit","repayment_info"): {
@@ -125,7 +127,7 @@ TEMPLATES = {
         "buttons": [{"id":"credit_repay","title":"📅 Repayment"}],
     },
     ("credit","trust_score"): {
-        "text": "🔎 Your Bab.ai Trust Score speeds up approvals. Want to see it and how to improve?",
+        "text": "🔎 Your Thirtee  Trust Score speeds up approvals. Want to see it and how to improve?",
         "buttons": [{"id":"trust_score","title":"🔎 View Score"}],
     },
 
@@ -224,8 +226,8 @@ Allowed contexts:
 Rules:
 - Choose exactly ONE intent and ONE context from the allowed lists.
 - Use intent="ambiguous" ONLY if the message provides no clear cues.
-- If intent="ambiguous", set context="help" if the users's message is unclear but is logically/ intentionally related to PRocurement or credit or Siteops
-- If intent="ambiguous", set context="chit-chat" if the users's message is unrelated to Procurement or credit or Siteops.
+- If intent="ambiguous", set context="help" if the users's message is unclear but is related to Procurement or credit or Siteops
+- If intent="ambiguous", set context="chit-chat" if the users's message is unrelated and feels like a casual conversation, joking or light-hearted banter or anything else.
 - Prefer the most actionable context.
 - Infer obvious slots from the message; leave absent ones as null.
 - If uncertain, use intent="random", context="help".
@@ -237,8 +239,8 @@ User message:
 def _format_prompt(user_text: str) -> str:
     return (CLASSIFY_PROMPT
         .replace("%PROC%", ", ".join(ALLOWED["procurement"]))
-        .replace("%CRED%", ", ".join(ALLOWED["credit"]))
-        .replace("%SITE%", ", ".join(ALLOWED["siteops"]))
+       # .replace("%CRED%", ", ".join(ALLOWED["credit"]))
+       #  .replace("%SITE%", ", ".join(ALLOWED["siteops"]))
         .replace("%MSG%", (user_text or "").strip())
     )
 
@@ -366,7 +368,7 @@ async def route_and_respond(state: Dict[str, Any]) -> Dict[str, Any]:
     # If image/doc present, pre-seed slots
     image_seed = {}
     if user_msg_type == "image" or state.get("image_path"):
-        image_seed = {"doc_present": True, "doc_type": "photo"}
+         image_seed = {"doc_present": True, "doc_type": "photo"}
     print("Convo Router :::::: Route and Respond:::: Formatting Prompt")
     prompt = _format_prompt(user_msg_text)
     resp = await _llm.ainvoke([
@@ -395,13 +397,15 @@ async def route_and_respond(state: Dict[str, Any]) -> Dict[str, Any]:
     if intent == "ambiguous":
          
          chosen_intent = state.get("last_known_intent") or FALLBACK["intent"]
-         context = "help" 
+         #context = "help" 
 
     state["intent_context"] = context
     print("Convo Router :::::: Route and Respond:::: Found chosen_intent and  context - ", chosen_intent, context)
+    
+    #if state["last_known_intent"] not in {"procurement","credit","siteops"} and chosen_intent =="random":
 
  
-    if chosen_intent =="procurement" and context in {"start_order","order_followup","upload","upload_doc","help", "chit-chat"}:
+    if chosen_intent =="procurement" and context in {"start_order","quote_followup","upload","upload_doc","help", "chit-chat"}:
         print("Convo Router :::::: Route and Respond:::: PRocurement intent - trying_to_understand_process", "get_quotes")
         from agents.procurement_agent import run_procurement_agent
         
@@ -424,14 +428,14 @@ async def route_and_respond(state: Dict[str, Any]) -> Dict[str, Any]:
         except Exception as e:
             print("Convo Router :::::: Error in random classify_and_respond:", e)
    
-
+ 
    # Remaining contexts might need additional infomration from user beofre passing tot he agent or its just faster to directly resopnd to them withoug having to touch the agent.
     required = REQUIRED_SLOTS.get((intent, context), [])
     await _apply_state(state, intent, context, merged_slots, required)
     # Persist slots back to state
     state["extracted_slots"] = merged_slots
     return state
-
+ 
 async def _apply_state(state: Dict[str, Any], intent: str, context: str, slots: Dict[str, Any], required: List[str]) -> None:
     tpl = TEMPLATES.get((intent, context), TEMPLATES[("random","help")])
 
@@ -451,3 +455,4 @@ async def _apply_state(state: Dict[str, Any], intent: str, context: str, slots: 
     state["uoc_next_message_type"] = "button"
     state["uoc_next_message_extra_data"] = tpl.get("buttons", [])
     state["needs_clarification"] = bool(missing)
+ 

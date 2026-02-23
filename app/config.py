@@ -21,7 +21,7 @@ class Settings(BaseSettings):
     )
 
     # ---- App basics ----
-    APP_NAME: str = "bab.ai API"
+    APP_NAME: str = "Thirtee  API"
     STAGE: str = "prod"
 
     # ---- Database ----

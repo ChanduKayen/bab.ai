@@ -4,7 +4,7 @@ import datetime
 import json
 from uuid import uuid4
 from decimal import Decimal
-from typing import List, Dict, Any
+from typing import Any, Dict, List, Optional
 import re
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy import select, or_, and_, case, cast, String, desc, func, text
@@ -15,7 +15,9 @@ from utils.sku_normalizer import (
 )
 from database.models import SkuMaster, SkuVendorPrice, MaterialRequestItem
 from sqlalchemy import update as sa_update
-
+from collections import defaultdict
+from sqlalchemy import select
+from database.models import MaterialRequestItem, MaterialRequest
 DEFAULT_SIM_THRESHOLD = 0.12
 
 SEARCH_SQL = text("""
@@ -219,7 +221,7 @@ class SkuCRUD:
         await self.session.execute(stmt)
         print(f"sku_crud ::::: upsert_price ::::: upsert OK for sku_id={sku_id}")
 
-    async def _create_ambiguous_sku(self, req_query: str, fallback_parse: dict | None = None) -> str:
+    async def _create_ambiguous_sku(self, req_query: str, fallback_parse: Optional[Dict[str, Any]] = None) -> str:
         # Minimal viable SKU row with required fields
         sid = str(uuid4())
         # Try parse to derive a category/type
@@ -501,4 +503,5 @@ class SkuCRUD:
             print(f"sku_crud ::::: insert_sku_vendor_quotes ::::: ERROR for sku_id={item.sku_id} : {e}")
             raise
         print(f"sku_crud ::::: insert_sku_vendor_quotes ::::: OK for item_id={item.requested_item_id}")
+
 

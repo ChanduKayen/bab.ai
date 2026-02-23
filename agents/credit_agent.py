@@ -88,16 +88,16 @@ async def run_credit_agent(state: dict,  config: dict):
     
     state.update(
         intent="credit", 
-        latest_respons="Welcome to Bab.ai Credit! How can I assist you today?",
+        latest_respons="Welcome to Thirtee  Credit! How can I assist you today?",
         uoc_question_type="credit",
         needs_clarification=True,
     )
     if last_msg =="routed_from_other_agent":
-        state["latest_respons"] =  ( "💳 Bab.ai Credit — India's first credit system for builders.\n\n"
+        state["latest_respons"] =  ( "💳 Thirtee  Credit — India's first credit system for builders.\n\n"
                                     "Turn a material need into purchasing power in minutes:\n\n"
                                     "① Send your requirement — photo, invoice, or a simple message.\n"
                                     "② Check eligibility instantly\n"
-                                    "③ Choose your vendor — Bab.ai pays.\n\n"
+                                    "③ Choose your vendor — Thirtee  pays.\n\n"
                                     "Reply now with your requirement to begin.\n")
         state["needs_clarification"] = True
         state["uoc_question_type"] ="credit_start"
@@ -155,8 +155,8 @@ async def run_credit_agent(state: dict,  config: dict):
         msg = (" *💳 Your credit summary (🟢 Active)* \n\n"
               
                f"Credit Issuer: HDFC Bank \nAvailable Amounts: ₹ {limit - used:,} \nUsed Amount ₹{used:,}\n\n\n"
-               "Pick a verified local supplier, lock your quote, and Bab.ai handles payment with bank-grade security.\n"
-               #"Choose vendor 🛒 → Confirm Invoice🧾→ Bab.ai pays securely💳 →  Split into EMIs 🔄"
+               "Pick a verified local supplier, lock your quote, and Thirtee  handles payment with bank-grade security.\n"
+               #"Choose vendor 🛒 → Confirm Invoice🧾→ Thirtee  pays securely💳 →  Split into EMIs 🔄"
                )
         active_material_request_id = state["active_material_request_id"] if "active_material_request_id" in state else None
         
@@ -185,7 +185,7 @@ async def run_credit_agent(state: dict,  config: dict):
     ]) 
         return state
     # not approved start onboarding
-    msg = ("💳 Let’s help you access Bab.ai Credit.\n"
+    msg = ("💳 Let’s help you access Thirtee  Credit.\n"
            "India’s First Virtual Credit Card, Engineered for Builders.\n\n"
            "To get started, we’ll securely collect your Aadhaar, PAN, and GST details, along with your consent for verification.\n"
            "🔒 Your information will be encrypted end-to-end and shared only with our licensed and regulated credit partners, strictly for the purpose of assessing your eligibility.\n\n"
@@ -288,7 +288,7 @@ async def handle_collect_consent(state):
         "✅ Application received!\n\n"
         "Your approval will be ready in just 2–5 minutes\n.\n"
         "While we process it, you can start getting quotations from our trusted partner vendors — "
-        "the same local suppliers you already know and buy from, now available instantly through Bab.ai."
+        "the same local suppliers you already know and buy from, now available instantly through Thirtee ."
     )
     state.update(
         latest_respons=latest_response,
@@ -361,8 +361,8 @@ async def handle_poll_approval(state, crud):
                 state["latest_respons"] = (
                     "🎉🎉Congralutions! Your Credit Request Approved!\n\n"
                     f"Available Limit: ₹{available:,.0f} \n\n"
-                    "You may now proceed to pick a verified local supplier, lock your quote, and Bab.ai handles payment with bank-grade security."
-                   # f"Bab.ai Trust Score: {trust_score:.0f}"
+                    "You may now proceed to pick a verified local supplier, lock your quote, and Thirtee  handles payment with bank-grade security."
+                   # f"Thirtee  Trust Score: {trust_score:.0f}"
                 )
                 active_material_request_id = state["active_material_request_id"] if "active_material_request_id" in state else None
                 #review_order_url = apis.get_review_order_url("https://bab-ai.com/review-order", {}, {"uuid": state["active_material_request_id"]})
