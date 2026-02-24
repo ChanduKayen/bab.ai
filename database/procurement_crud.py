@@ -43,7 +43,7 @@ class ProcurementCRUD:
         dt = (when or datetime.utcnow()).replace(tzinfo=timezone.utc)
         return dt.isoformat()
 
-    def _merge_status_history(self, history: Optional[Dict[str, Any]], status: Any, *, when: Optional[datetime] = None) -> str:
+    def _merge_status_history(self, history: Optional[Dict[str, Any]], status: Any, *, when: Optional[datetime] = None) -> Dict[str, Any]:
         if isinstance(history, str):
             history = json.loads(history)
         if isinstance(status, PyEnum):
@@ -52,7 +52,7 @@ class ProcurementCRUD:
             key = str(status)
         updated = dict(history or {})
         updated[key] = self._now_iso(when)
-        return json.dumps(updated)
+        return updated
 
     async def _schedule_vendor_followups(
         self,
@@ -701,7 +701,7 @@ class ProcurementCRUD:
                             "comments": item.comments,
                             "status_history": func.merge_status_history(
                                 VendorQuoteItemDB.status_history,
-                                cast(literal(new_history), JSONB),
+                                cast(literal(json.dumps(new_history)), JSONB),
                             ),
                             "status": QuoteStatus.QUOTED,
                             "updated_at": now,
