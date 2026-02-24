@@ -223,14 +223,18 @@ async def vendor_quote_response(payload: VendorQuoteResponse):
                 user_id = await crud.get_sender_id_from_request(str(payload.request_id))
             vendor_name = getattr(vendor_record, "name", None)
 
-        await notify_user_vendor_quote_update(
-            user_id=user_id,
-            vendor_name=vendor_name,
-            request_id=str(payload.request_id),
-            project_name=summary.get("project_name") if summary else None,
-            project_location=summary.get("project_location") if summary else None,
-            is_update=had_existing,
-        )
+        # Non-fatal: quote is already saved, so don't fail if WhatsApp notification errors
+        try:
+            await notify_user_vendor_quote_update(
+                user_id=user_id,
+                vendor_name=vendor_name,
+                request_id=str(payload.request_id),
+                project_name=summary.get("project_name") if summary else None,
+                project_location=summary.get("project_location") if summary else None,
+                is_update=had_existing,
+            )
+        except Exception as notify_err:
+            print(f"apis ::::: vendor_quote_response ::::: WhatsApp notification failed (non-fatal): {notify_err}")
 
         return {"success": True, "message": "Quote submitted successfully."}
     except Exception as e:
