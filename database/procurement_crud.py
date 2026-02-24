@@ -1,5 +1,6 @@
 
 import asyncio
+import json
 from datetime import datetime, timezone
 from decimal import Decimal
 from enum import Enum as PyEnum
@@ -42,14 +43,16 @@ class ProcurementCRUD:
         dt = (when or datetime.utcnow()).replace(tzinfo=timezone.utc)
         return dt.isoformat()
 
-    def _merge_status_history(self, history: Optional[Dict[str, Any]], status: Any, *, when: Optional[datetime] = None) -> Dict[str, Any]:
+    def _merge_status_history(self, history: Optional[Dict[str, Any]], status: Any, *, when: Optional[datetime] = None) -> str:
+        if isinstance(history, str):
+            history = json.loads(history)
         if isinstance(status, PyEnum):
             key = status.value
         else:
             key = str(status)
         updated = dict(history or {})
         updated[key] = self._now_iso(when)
-        return updated
+        return json.dumps(updated)
 
     async def _schedule_vendor_followups(
         self,
