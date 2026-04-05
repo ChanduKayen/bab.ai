@@ -609,6 +609,81 @@ _HANDLER_MAP = {
 # -----------------------------------------------------------------------------
 # Orchestration Flows
 # -----------------------------------------------------------------------------
+async def handle_project_selection(state: AgentState, items: list) -> AgentState:
+    """
+    After extraction, ask builder which site this order is for.
+    Only runs when active_project_id is not already set in state.
+    Returns state with project selection prompt set, or unchanged if
+    active_project_id already exists.
+    """
+    # Skip if project already selected this session
+    if state.get("active_project_id"):
+        return state
+
+    sender_id = state.get("sender_id", "")
+
+    try:
+        async with AsyncSessionLocal() as session:
+            crud = DatabaseCRUD(session)
+            projects = await crud.get_projects_by_sender(sender_id)
+    except Exception as e:
+        print(f"procurement_agent ::::: handle_project_selection ::::: failed to fetch projects: {e}")
+        return state  # fail silently, proceed without project
+
+    # Store items in state so they survive the round-trip
+    state.setdefault("procurement_details", {})["materials"] = items
+
+    if len(projects) == 0:
+        # No existing projects — ask for site name as plain text
+        state.update(
+            latest_respons="Quick one — what site is this for? (e.g. Kakinada flat, Rajahmundry villa)",
+            uoc_next_message_type="button",
+            uoc_next_message_extra_data=[
+                {"id": "skip_project", "title": "Skip →"}
+            ],
+            uoc_question_type="project_name_input",
+            needs_clarification=True,
+            agent_first_run=False,
+        )
+    elif len(projects) <= 2:
+        # 1-2 projects — show them + New Site + Skip
+        buttons = []
+        for p in projects[:2]:
+            buttons.append({
+                "id": f"select_project_{p['id']}",
+                "title": p["title"][:20]  # WhatsApp button title limit
+            })
+        buttons.append({"id": "new_project", "title": "New Site"})
+        if len(buttons) < 3:
+            buttons.append({"id": "skip_project", "title": "Skip →"})
+        state.update(
+            latest_respons="Which site is this for?",
+            uoc_next_message_type="button",
+            uoc_next_message_extra_data=buttons[:3],  # WhatsApp max 3 buttons
+            uoc_question_type="project_name_input",
+            needs_clarification=True,
+            agent_first_run=False,
+        )
+    else:
+        # 3+ projects — show last 2 + New Site
+        buttons = []
+        for p in projects[:2]:
+            buttons.append({
+                "id": f"select_project_{p['id']}",
+                "title": p["title"][:20]
+            })
+        buttons.append({"id": "new_project", "title": "New Site"})
+        state.update(
+            latest_respons="Which site is this for?",
+            uoc_next_message_type="button",
+            uoc_next_message_extra_data=buttons[:3],
+            uoc_question_type="project_name_input",
+            needs_clarification=True,
+            agent_first_run=False,
+        )
+
+    return state
+
 async def new_user_flow(state: AgentState, crud: ProcurementCRUD  ) -> AgentState:
     intent =state["intent"]
     latest_msg_intent =state.get("intent")
@@ -743,6 +818,49 @@ async def new_user_flow(state: AgentState, crud: ProcurementCRUD  ) -> AgentStat
             )
             return state
 
+        # Ask builder which site this is for (if not already set)
+        if not state.get("active_project_id"):
+            updated = await handle_project_selection(state, items)
+            # If project selection prompt was set, return and wait for builder's response
+            if updated.get("uoc_question_type") == "project_name_input":
+                return updated
+
+        # Run pattern + market intelligence in background
+        # Both fail silently — never block the order flow
+        hint = None
+        try:
+            sender_id = state.get("sender_id", "")
+            project_id = state.get("active_project_id")
+
+            async with AsyncSessionLocal() as intel_session:
+                from managers.site_pattern import SitePatternService
+                from managers.market_intelligence import MarketIntelligenceService
+
+                pattern_svc = SitePatternService(intel_session)
+                market_svc = MarketIntelligenceService(intel_session)
+
+                # Get vendor pincode from project location if available
+                pincode = None
+
+                # Run both checks
+                pattern_hint = await pattern_svc.get_hint_for_new_order(
+                    sender_id=sender_id,
+                    new_items=items,
+                    project_id=project_id,
+                )
+                market_hint = await market_svc.get_market_hint(
+                    new_items=items,
+                    region_pincode=pincode,
+                )
+
+                # Pattern hint takes priority — more personal
+                # Market hint fires only if no pattern hint
+                hint = pattern_hint or market_hint
+
+        except Exception as e:
+            print(f"procurement_agent ::::: intelligence services failed: {e}")
+            hint = None
+
         state.setdefault("procurement_details", {})["materials"] = items
         print("Procurement Agent:::: new_user_flow : extracted materials:", state["procurement_details"]["materials"])
         
@@ -773,9 +891,12 @@ async def new_user_flow(state: AgentState, crud: ProcurementCRUD  ) -> AgentStat
                 sample_text += f" and {total - 2} more"
 
             if uncertain > 0:
-                msg = f"Found {total} items — {sample_text}. {uncertain} need a quick check. Tap to review."
+                base_msg = f"Found {total} items — {sample_text}. {uncertain} need a quick check. Tap to review."
             else:
-                msg = f"Found {total} items — {sample_text}. Tap to review and select vendors."
+                base_msg = f"Found {total} items — {sample_text}. Tap to review and select vendors."
+
+            # Prepend intelligence hint if available
+            msg = f"{hint}\n\n{base_msg}" if hint else base_msg
 
             state.update(
                 latest_respons=msg,

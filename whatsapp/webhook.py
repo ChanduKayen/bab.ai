@@ -1,4 +1,5 @@
 from fastapi import APIRouter, Request, Depends, Request
+from uuid import uuid4
 from agents import procurement_agent, vendor_agent
 from orchastrator.core import builder_graph 
 import sys 
@@ -832,6 +833,77 @@ async def handle_whatsapp_event(data: dict):
                 except Exception as e:
                     print("Webhook :::::: whatsapp_webhook::::: Error calling vendor_agent.run_vendor_agent:", e)
                     import traceback; traceback.print_exc()
+            elif q_type == "project_name_input":
+                print("Webhook :::::: q_type = project_name_input :::: handling project selection")
+                last_msg = state.get("messages", [])
+                user_text = last_msg[-1].get("content", "").strip() if last_msg else ""
+
+                try:
+                    async with AsyncSessionLocal() as session:
+                        uoc_crud = DatabaseCRUD(session)
+
+                        if user_text == "skip_project":
+                            # Builder skipped — proceed without project
+                            state["uoc_question_type"] = "procurement_new_user_flow"
+                            state["needs_clarification"] = True
+                            followups_state = await procurement_agent.run_procurement_agent(
+                                state, config={"configurable": {"crud": uoc_crud}}
+                            )
+
+                        elif user_text == "new_project":
+                            # Builder wants to create a new site — send portal link
+                            project_url = os.getenv("REVIEW_ORDER_URL_BASE", "").replace(
+                                "orders/review-order", "projects/new"
+                            ) + f"?senderId={sender_id}"
+                            followups_state = state.copy()
+                            followups_state.update(
+                                latest_respons="Create your site in 20 seconds 👇",
+                                uoc_next_message_type="link_cta",
+                                uoc_next_message_extra_data={
+                                    "display_text": "Set Up Site →",
+                                    "url": project_url,
+                                },
+                                needs_clarification=False,
+                            )
+
+                        elif user_text.startswith("select_project_"):
+                            # Builder tapped an existing project
+                            project_id = user_text.replace("select_project_", "")
+                            state["active_project_id"] = project_id
+                            state["uoc_question_type"] = "procurement_new_user_flow"
+                            state["needs_clarification"] = True
+                            followups_state = await procurement_agent.run_procurement_agent(
+                                state, config={"configurable": {"crud": uoc_crud}}
+                            )
+
+                        else:
+                            # Builder typed a project name — create it and proceed
+                            project_data = {
+                                "id": str(uuid4()),
+                                "name": user_text,
+                                "sender_id": sender_id,
+                                "location": None,
+                            }
+                            project = await uoc_crud.create_project(project_data)
+                            state["active_project_id"] = str(project.id)
+                            state["uoc_question_type"] = "procurement_new_user_flow"
+                            state["needs_clarification"] = True
+                            followups_state = await procurement_agent.run_procurement_agent(
+                                state, config={"configurable": {"crud": uoc_crud}}
+                            )
+
+                except Exception as e:
+                    print("Webhook :::::: project_name_input ::::: exception:", e)
+                    import traceback; traceback.print_exc()
+                    followups_state = state.copy()
+                    followups_state.update(
+                        latest_respons="Something went wrong. Let's continue with your order.",
+                        uoc_next_message_type="button",
+                        uoc_next_message_extra_data=[
+                            {"id": "edit_order", "title": "Review Order →"}
+                        ],
+                        needs_clarification=True,
+                    )
             else:
                 raise ValueError(f"Unknown uoc_question_type: {state['uoc_question_type']}")
 
