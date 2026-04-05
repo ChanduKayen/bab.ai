@@ -202,7 +202,7 @@ class TaskHandler:
         confidence = result.get("uoc_confidence", "low" if region == "uncertain" else "high")
         state["uoc_confidence"] = confidence
         print(f"project_intel:::get_region_via_llm::: --LLM response --: {result}")
-        state["latest_respons"] = followup if region == "uncertain" else f"Identified region: {region}"
+        state["latest_response"] = followup if region == "uncertain" else f"Identified region: {region}"
         
         if confidence == "high":
             print("project_intel:::get_region_via_llm::: --High confidence in region identification, updating state --")
@@ -252,23 +252,23 @@ class TaskHandler:
         state_after_region_selection = state
         if state.get("uoc_confidence", "low") == "low":
             state_after_region_selection = await self.get_region_via_llm(state)
-        latest_response = state_after_region_selection.get("latest_respons", "")
+        latest_response = state_after_region_selection.get("latest_response", "")
         if latest_response == "":
             print("project_intel:::handle_job_update::: --No region identified, returning empty state --")
             return {"error": "No region identified"}
         if latest_response.startswith("Identified region"):
-            selected_region = state_after_region_selection.get("latest_respons", "")
+            selected_region = state_after_region_selection.get("latest_response", "")
             selected_region = selected_region.split("Identified region:")[-1].strip()
           
         if state_after_region_selection.get("uoc_confidence", "low") == "low":
             print(f"project_intel:::handle_job_update::: --Low confidence in region identification, asking for clarification --")  
-            state["latest_respons"] = state_after_region_selection.get("latest_respons", "")
+            state["latest_response"] = state_after_region_selection.get("latest_response", "")
             state.update({
                 "needs_clarification": True,
                 "uoc_question_type": "task_region_identification",
                 "uoc_next_message_type": "plain",
             }) 
-            print("project_intel:::handle_job_update::: --Returning state with clarification needed --:", state["latest_respons"])
+            print("project_intel:::handle_job_update::: --Returning state with clarification needed --:", state["latest_response"])
             return state
         
         print(f"project_intel:::handle_job_update::: --Identified region --:", selected_region)

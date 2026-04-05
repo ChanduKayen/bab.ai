@@ -25,7 +25,7 @@ class AgentState(TypedDict):
     context: Optional[str]
     uoc_next_message_type: Optional[str]
     uoc_next_message_extra_data: Optional[List[dict]] 
-    latest_respons: Optional[str]
+    latest_response: Optional[str]
     project_setup_mode: Optional[bool]    
     project_structure: Optional[dict]     
     fuzzy_project_suggestion:Optional[dict]

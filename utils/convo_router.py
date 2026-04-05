@@ -464,7 +464,7 @@ async def _apply_state(state: Dict[str, Any], intent: str, context: str, slots: 
     state["latest_msg_intent"] = intent
     state["intent_context"] = context
     state["missing_slots"] = missing
-    state["latest_respons"] = base_text
+    state["latest_response"] = base_text
     state["uoc_question_type"] = tpl.get("qtype", state.get("uoc_question_type"))
     # Force explicit next message type for button UIs
     state["uoc_next_message_type"] = "button"

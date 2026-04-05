@@ -206,7 +206,7 @@ async def collect_vendor_profile_interactively(state: AgentState) -> AgentState:
         "You are Thirtee's Vendor Success AI. Gather supplier onboarding details. "
         "Always reply with JSON containing:\n"
         "  vendor_profile (object with the fields you know),\n"
-        "  latest_respons (string message for WhatsApp),\n"
+        "  latest_response (string message for WhatsApp),\n"
         "  next_message_type (plain, button, link_cta),\n"
         "  next_message_extra_data (list or object for CTA payload),\n"
         "  needs_clarification (bool),\n"
@@ -232,7 +232,7 @@ async def collect_vendor_profile_interactively(state: AgentState) -> AgentState:
     except Exception as exc:
         print("Vendor Agent:::: collect_vendor_profile_interactively ::: LLM error", exc)
         state.update(
-            latest_respons="Sorry, I could not record that. Could you share the vendor details once more?",
+            latest_response="Sorry, I could not record that. Could you share the vendor details once more?",
             uoc_next_message_type="plain",
             uoc_question_type="vendor_onboarding",
             needs_clarification=True,
@@ -251,7 +251,7 @@ async def collect_vendor_profile_interactively(state: AgentState) -> AgentState:
         state["vendor_profile"] = _merge_profile(updated_profile)
 
     state.update(
-        latest_respons=parsed.get("latest_respons")
+        latest_response=parsed.get("latest_response")
         or "Noted. Could you confirm the remaining vendor details?",
         uoc_next_message_type=parsed.get("next_message_type", "plain"),
         uoc_next_message_extra_data=parsed.get("next_message_extra_data") or [],
@@ -270,7 +270,7 @@ async def collect_vendor_profile_interactively(state: AgentState) -> AgentState:
         prompt = ", ".join(missing[:3])
         state.update(
             needs_clarification=True,
-            latest_respons=(
+            latest_response=(
                 f"I still need *{prompt}* to finish onboarding. Share those details?"
             ),
             uoc_next_message_type="plain",
@@ -285,7 +285,7 @@ async def collect_vendor_profile_interactively(state: AgentState) -> AgentState:
         congrats = (
             "\U0001f389 You are all set! We'll notify you whenever a new RFQ is assigned."
         )
-        state["latest_respons"] = parsed.get("latest_respons") or congrats
+        state["latest_response"] = parsed.get("latest_response") or congrats
 
     return state
 
@@ -314,7 +314,7 @@ async def handle_vendor_portal(
     url = f"{base}{query}"
     state.update(
         intent="vendor_portal",
-        latest_respons="Open your live vendor workspace to view assigned RFQs.",
+        latest_response="Open your live vendor workspace to view assigned RFQs.",
         uoc_next_message_type="link_cta",
         uoc_next_message_extra_data={"display_text": "Open Vendor Console", "url": url},
         needs_clarification=False,
@@ -331,7 +331,7 @@ async def handle_vendor_quotes(
 ) -> AgentState:
     state.update(
         intent="vendor_quotes",
-        latest_respons=(
+        latest_response=(
             "Here are the latest quote requests linked to you."
             " Use the portal to submit prices or update availability."
         ),
@@ -352,7 +352,7 @@ async def handle_vendor_support(
     support_contact = os.getenv("VENDOR_SUPPORT_NUMBER", "9988776655")
     state.update(
         intent="vendor_support",
-        latest_respons=(
+        latest_response=(
             "No problem. Our vendor success team is available on WhatsApp "
             f"*{support_contact}*. Describe your issue and we'll step in."
         ),
@@ -371,7 +371,7 @@ async def handle_main_menu(
     extra_data: Optional[Any] = None,
 ) -> AgentState:
     state.update(
-        latest_respons="What would you like to do next?",
+        latest_response="What would you like to do next?",
         uoc_next_message_type="button",
         uoc_next_message_extra_data=_VENDOR_WELCOME_CTA,
         needs_clarification=True,
@@ -399,7 +399,7 @@ async def _handle_vendor_ack(state: AgentState, action: str) -> AgentState:
 
     if not req_id or not vendor_id:
         state.update(
-            latest_respons="Sorry, the order context expired. Please ask the team to resend the link.",
+            latest_response="Sorry, the order context expired. Please ask the team to resend the link.",
             uoc_next_message_type="plain",
             needs_clarification=False,
         )
@@ -412,7 +412,7 @@ async def _handle_vendor_ack(state: AgentState, action: str) -> AgentState:
     except Exception as exc:
         print("Vendor Agent:::: vendor acknowledgement failed:", exc)
         state.update(
-            latest_respons="We could not record your response. Please try again shortly.",
+            latest_response="We could not record your response. Please try again shortly.",
             uoc_next_message_type="plain",
             needs_clarification=False,
         )
@@ -426,7 +426,7 @@ async def _handle_vendor_ack(state: AgentState, action: str) -> AgentState:
                 message_type="plain",
             )
         state.update(
-            latest_respons="Thanks! Order confirmation recorded. We will coordinate logistics next.",
+            latest_response="Thanks! Order confirmation recorded. We will coordinate logistics next.",
             uoc_next_message_type="plain",
             needs_clarification=False,
         )
@@ -444,7 +444,7 @@ async def _handle_vendor_ack(state: AgentState, action: str) -> AgentState:
                 message_type="plain",
             )
         state.update(
-            latest_respons="Understood. We have let the buyer know you cannot fulfill this order.",
+            latest_response="Understood. We have let the buyer know you cannot fulfill this order.",
             uoc_next_message_type="plain",
             needs_clarification=False,
         )
@@ -465,7 +465,7 @@ async def new_vendor_flow(
 
     if state.get("agent_first_run", True) :
         state.update(
-            latest_respons=(
+            latest_response=(
                 "\U0001f3ed *Welcome to Thirtee Supplier Hub!*\n\n"
                 "Share a quick profile so we can match the right RFQs:\n"
                 "1. Company & GST\n2. Materials you supply\n3. Service regions\n4. Primary contact\n"
@@ -484,7 +484,7 @@ async def new_vendor_flow(
     if missing and state.get("intent") != "vendor_onboarding":
         prompt = ", ".join(missing[:3])
         state.update(
-            latest_respons=(
+            latest_response=(
                 f"I still need *{prompt}* to finish your onboarding. Could you share those?"
             ),
             uoc_next_message_type="plain",
@@ -494,7 +494,7 @@ async def new_vendor_flow(
         return state
 
     state.update(
-        latest_respons="Great! You're onboarded. Choose what you'd like to do next.",
+        latest_response="Great! You're onboarded. Choose what you'd like to do next.",
         uoc_next_message_type="button",
         uoc_next_message_extra_data=_VENDOR_PRIMARY_CTA,
         needs_clarification=True,

@@ -208,7 +208,7 @@ class UOCManager:
                 state["messages"].append({
                     "role": "assistant",
                     "content": f"Did you mean '{match['title']}'?"})
-                state["latest_respons"] = f"Did you mean '{match['title']}'? Please confirm."
+                state["latest_response"] = f"Did you mean '{match['title']}'? Please confirm."
                 state["uoc_next_message_type"] = "button"
                 state["uoc_next_message_extra_data"] = [{"id": "yes", "title": "Yes"}, {"id": "no", "title": "No"}]
                 return state
@@ -223,7 +223,7 @@ class UOCManager:
                 "role": "assistant",
                 "content": "Please select your project:",
             })
-            state["latest_respons"] = "Please select your project from the list below or add a new one."
+            state["latest_response"] = "Please select your project from the list below or add a new one."
             state["uoc_next_message_type"] = "button"
             project_titles = [
     {
@@ -339,7 +339,7 @@ class UOCManager:
                     print(f"UOC Manager:::::: collect_project_structure_with_priority_sources:::::: -- File received ({file_type}), processing...")
                     return await self.process_plan_file(state, file_url, file_type)
 
-                state["latest_respons"] = "Please upload the project plan image or PDF to continue."
+                state["latest_response"] = "Please upload the project plan image or PDF to continue."
                 state["needs_clarification"] = True
                 return state
             elif last_message in ["no","I don't", "continue without it","no_plan"]:
@@ -358,7 +358,7 @@ Let’s begin with your site plan 👇"""
             state.update({
             "needs_clarification": True,   
             "uoc_question_type": "has_plan_or_doc",
-            "latest_respons": random.choice(possible_messages),
+            "latest_response": random.choice(possible_messages),
             "uoc_next_message_type": "button",
             "uoc_next_message_extra_data": [
                 {"id": "has_plan", "title": "I have a plan"},
@@ -386,7 +386,7 @@ Let’s begin with your site plan 👇"""
             # Assume PDF text was extracted and stored in state
             pdf_text = state.get("pdf_text")
             if not pdf_text:
-                state["latest_respons"] = "⚠️ Sorry, I couldn’t read your PDF. Please try with a clearer version."
+                state["latest_response"] = "⚠️ Sorry, I couldn’t read your PDF. Please try with a clearer version."
                 state["needs_clarification"] = True
                 return state
             print("UOC Manager:::::: process_plan_file:::::: -- PDF text extracted --")
@@ -530,11 +530,11 @@ OUTPUT RULES
             state["project_structure"] = structure
             state["needs_clarification"] = True
             state["uoc_confidence"] = "low"
-            #state["latest_respons"] = "This is the information we have so far: " + str(structure)
+            #state["latest_response"] = "This is the information we have so far: " + str(structure)
             return await self.collect_project_structure_interactively(state)
         except Exception as e:
             print("UOC Manager:::::: process_plan_file:::::: -- Error with GPT-4o vision processing:", str(e))
-            state["latest_respons"] = "Sorry, I couldn’t read your plan correctly. Please try with a clearer version."
+            state["latest_response"] = "Sorry, I couldn’t read your plan correctly. Please try with a clearer version."
             state["needs_clarification"] = True
             return state
         
@@ -594,7 +594,7 @@ OUTPUT RULES
   
             At the end of your reasoning, ALWAYS respond in this exact JSON format:
             {
-              "latest_respons": "<your next WhatsApp message here>",
+              "latest_response": "<your next WhatsApp message here>",
               "next_message_type": "button",  // 'plain' for text-only, 'button' for buttons
               "next_message_extra_data": [{ "id": "<kebab-case>", "title": "<≤20 chars>" }, "{ "id": "<kebab-case>", "title": "<≤20 chars>" }", "{ "id": "main_menu", "title": "📋 Main Menu" }"],
               "project_structure": { <updated structure so far> },
@@ -631,7 +631,7 @@ OUTPUT RULES
             state.update({
                 "needs_clarification": True,
                 "uoc_confidence": "low",
-                "latest_respons": "Sorry, I couldn’t read that. Could you please re-phrase?"
+                "latest_response": "Sorry, I couldn’t read that. Could you please re-phrase?"
             })
             return state
 
@@ -646,7 +646,7 @@ OUTPUT RULES
         # COPY CONTROL FIELDS
         # ------------------------------------------------------------------
         state.update({
-            "latest_respons": parsed["latest_respons"],
+            "latest_response": parsed["latest_response"],
             "uoc_next_message_type": parsed.get("next_message_type", "plain"),
             "uoc_next_message_extra_data": parsed.get("next_message_extra_data"),
             "needs_clarification": parsed.get("needs_clarification", True),
@@ -665,7 +665,7 @@ OUTPUT RULES
             if state.get("messages") else "")
         if user_message == "main_menu" or not state["needs_clarification"]:
             sender_id = state["sender_id"]
-            quick_msg = parsed.get("latest_respons", "Project setup completed. You can now continue with your project.")
+            quick_msg = parsed.get("latest_response", "Project setup completed. You can now continue with your project.")
             print("UOC Manager:::::: collect_project_structure_interactively:::::: -- User exited or completed setup with a message--", quick_msg)
             if not quick_msg:
                 quick_msg = "<Placeholder for project setup completion message>"
@@ -698,7 +698,7 @@ OUTPUT RULES
                    print("UOC Manager:::::: collect_project_structure_interactively:::::: -- list of IDs --", ids_list)
                except Exception as e:
                    print("UOC Manager:::::: collect_project_structure_interactively:::::: -- Error mapping region IDs --", str(e))
-                   state["latest_respons"] = "An error occurred while mapping region IDs. Please try again."
+                   state["latest_response"] = "An error occurred while mapping region IDs. Please try again."
                    state["needs_clarification"] = True
                    return state
         return state

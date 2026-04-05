@@ -155,7 +155,7 @@ async def handle_siteops(state: AgentState, latest_response: str, config: dict,
         state["messages"][-1]["content"] = ""
     state.update(
         intent="siteops",
-        latest_respons=latest_response,
+        latest_response=latest_response,
         uoc_next_message_type="button",
         uoc_question_type="onboarding",
         needs_clarification=True,
@@ -170,7 +170,7 @@ async def handle_procurement(state: AgentState, latest_response: str, config: di
         state["messages"][-1]["content"] = ""
     state.update(
         intent="procurement",
-        latest_respons=latest_response,
+        latest_response=latest_response,
         uoc_next_message_type="button",
         uoc_question_type="procurement",
         needs_clarification=True,
@@ -185,7 +185,7 @@ async def handle_credit(state: AgentState, latest_response: str, config: dict,
         state["messages"][-1]["content"] = "routed_from_random_agent"
     state.update(
         intent="credit",
-        latest_respons=latest_response,
+        latest_response=latest_response,
         uoc_next_message_type="plain",
         uoc_question_type="credit",
         needs_clarification=True,
@@ -204,7 +204,7 @@ async def handle_main_menu(state: AgentState, latest_response: str, config: dict
                            uoc_next_message_extra_data: Optional[Dict[str, str]]=None) -> AgentState:
     state.update(
         intent="random",
-        latest_respons=latest_response or "Welcome back! How can I assist you today?",
+        latest_response=latest_response or "Welcome back! How can I assist you today?",
         uoc_next_message_type="button",
         uoc_question_type="onboarding",
         needs_clarification=True,
@@ -262,13 +262,13 @@ async def classify_and_respond(state: AgentState, config: Optional[Dict[str, Any
     print("Random Agent::: Classify and respond ::: Called ")
     # --- 0) Button click direct routing (id equals handler key) ---
     if last_lower in _HANDLER_MAP:
-        return await _HANDLER_MAP[last_lower](state, latest_response=state.get("latest_respons", ""), config=config)
+        return await _HANDLER_MAP[last_lower](state, latest_response=state.get("latest_response", ""), config=config)
 
     # --- 1) Image-only or empty message: nudge with single CTA ---
     image_present = bool(state.get("image_path"))
     if (not last_msg and not re.search(r"\w", last_msg or "")) and not image_present:
         state.update(
-            latest_respons="🙂 Need site updates, quotations or credit? Try Thirtee !",
+            latest_response="🙂 Need site updates, quotations or credit? Try Thirtee !",
             uoc_next_message_type="button",
             uoc_next_message_extra_data=[{"id": "siteops", "title": "🏗 Manage My Site"}],
         )
@@ -281,7 +281,7 @@ async def classify_and_respond(state: AgentState, config: Optional[Dict[str, Any
         # If Convo Router produced a concrete intent (not random/help), fast-route
         intent = routed_state.get("latest_msg_intent") or routed_state.get("intent")
         context = routed_state.get("intent_context")
-        resp_text = routed_state.get("latest_respons")
+        resp_text = routed_state.get("latest_response")
         buttons = routed_state.get("uoc_next_message_extra_data") or []
         # Concrete intents we can immediately hand off to downstream agents:
         if intent in {"siteops", "procurement", "credit"} and resp_text:
@@ -295,7 +295,7 @@ async def classify_and_respond(state: AgentState, config: Optional[Dict[str, Any
 
         # If router says random/help, keep going and try the LLM concierge below.
         # But keep the router's helpful text/buttons as fallback UI if LLM fails.
-        router_help_text = routed_state.get("latest_respons")
+        router_help_text = routed_state.get("latest_response")
         router_help_buttons = buttons
     except Exception as e:
         log.error("random_router: Convo Router delegation failed: %s", e)
@@ -344,7 +344,7 @@ async def classify_and_respond(state: AgentState, config: Optional[Dict[str, Any
             else:
                 greeting_message = await generate_new_user_greeting(username)
             state.update(
-                latest_respons=_clean_message(greeting_message),
+                latest_response=_clean_message(greeting_message),
                 uoc_next_message_type="button",
                 uoc_question_type="onboarding",
                 needs_clarification=True,
@@ -363,7 +363,7 @@ async def classify_and_respond(state: AgentState, config: Optional[Dict[str, Any
     # If everything else fails, use router help (if any) else LLM result
     state.update(
         intent="random",
-        latest_respons=router_help_text or message,
+        latest_response=router_help_text or message,
         uoc_next_message_type="button",
         uoc_question_type="onboarding",
         needs_clarification=True,

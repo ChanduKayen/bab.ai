@@ -312,7 +312,7 @@ async def handle_siteops(state: AgentState, crud: DatabaseCRUD,latest_response: 
     #handle a message here 
     state.update(
         intent="siteops",
-        latest_respons=latest_response, 
+        latest_response=latest_response, 
         uoc_next_message_type="button",
         uoc_question_type="siteops_welcome",
         needs_clarification=True,  
@@ -326,7 +326,7 @@ async def handle_procurement(state: AgentState, crud: DatabaseCRUD,latest_respon
     #handle a message here 
     state.update(
         intent="procurement",
-        latest_respons=latest_response, 
+        latest_response=latest_response, 
         uoc_next_message_type="button",
         uoc_question_type="procurement_welcome",
         needs_clarification=True,  
@@ -339,7 +339,7 @@ async def handle_procurement(state: AgentState, crud: DatabaseCRUD,latest_respon
 def handle_main_menu(state: AgentState, crud: DatabaseCRUD, latest_response: str, uoc_next_message_extra_data=None) -> AgentState:
     state.update(
         intent="random",
-        latest_respons=latest_response,
+        latest_response=latest_response,
         uoc_next_message_type="button",
         uoc_question_type="siteops_welcome",
         needs_clarification=True,   
@@ -396,7 +396,7 @@ Language: {user_lang}
 
     print("Micro-lesson output:", response_text)
     print("SiteOps Agent:::: new_user_flow : user_stage is new")
-    state["latest_respons"] = response_text
+    state["latest_response"] = response_text
     state["uoc_next_message_extra_data"] = []
     state["uoc_next_message_type"] = "button"
     state["uoc_next_message_extra_data"] = [
@@ -427,7 +427,7 @@ ACTION NOW
 Why this matters:
 Every insight here is AI-generated from your site logs, BOQ plans, and daily productivity patterns — so you act fast, save cost, and stay ahead."""
         print("Siteops Agent:: Handle_project_overview:: ")
-        state["latest_respons"] = message
+        state["latest_response"] = message
         state["uoc_next_message_type"] = "button"
         state["needs_clarification"]=True
         state["uoc_next_message_type"]="procurement_new_user_flow"
@@ -478,7 +478,7 @@ async def new_user_flow(state: AgentState,latest_msg_intent:str, crud: DatabaseC
     user_name = state.get("user_full_name", "There")
     sender_id = state["sender_id"]
     uoc_next_message_extra_data = state.get("uoc_next_message_extra_data", [])
-    latest_response = state.get("latest_respons", None)
+    latest_response = state.get("latest_response", None)
     print("SiteOps Agent:::: new_user_flow : last_msg is: -", last_msg)
     print("SiteOps Agent:::: new_user_flow : sitops conversation log  is: -", state.get("siteops_conversation_log", []))
     print("SiteOps Agent:::: new_user_flow : the state received here is : -", state)
@@ -502,7 +502,7 @@ async def new_user_flow(state: AgentState,latest_msg_intent:str, crud: DatabaseC
 
             greeting_message = generate_new_user_greeting(user_name)
             print("SiteOps Agent:::: run_siteops_agent : generating new user greeting", greeting_message)
-            state["latest_respons"] = greeting_message
+            state["latest_response"] = greeting_message
             state["uoc_next_message_type"] = "button"
             state["uoc_question_type"] = "siteops_welcome"
             state["needs_clarification"] = True
@@ -537,7 +537,7 @@ async def new_user_flow(state: AgentState,latest_msg_intent:str, crud: DatabaseC
             state["siteops_conversation_log"].append({"role": "assistant", "content":  greeting_message })
             print("SiteOps Agent:::: run_siteops_agent : siteops_conversation_log:", state["siteops_conversation_log"])
             print("SiteOps Agent:::: run_siteops_agent : generating new user greeting", message)
-            state["latest_respons"] = greeting_message
+            state["latest_response"] = greeting_message
             state["uoc_next_message_type"] = "button"
             state["uoc_question_type"] = "siteops_welcome"
             state["needs_clarification"] = True
@@ -578,7 +578,7 @@ async def new_user_flow(state: AgentState,latest_msg_intent:str, crud: DatabaseC
             #     latest_response = "💳 Let's explore credit options suitable for your site."
             #     return await handle_credit(state, latest_response)
             else:
-                state["latest_respons"] = (
+                state["latest_response"] = (
                     "🤔 I'm not sure what you're looking for. "
                     "Please choose an option below."
                 )
@@ -612,7 +612,7 @@ async def run_siteops_agent(state: AgentState, config: dict) -> AgentState:
         uoc_mgr = UOCManager(crud)
     except Exception as e:
         print("SiteOps Agent:::: run_siteops_agent : failed to initialize crud or UOCManager:", e)
-        state["latest_respons"] = "Sorry, there was a system error. Please try again later."
+        state["latest_response"] = "Sorry, there was a system error. Please try again later."
         return state
     
     state.setdefault("siteops_conversation_log", [])

@@ -718,7 +718,7 @@ async def handle_whatsapp_event(data: dict):
                             print("Webhook :::::: process_plan_file failed:", e)
                             followups_state = state
                             followups_state.update(
-                                latest_respons=(
+                                latest_response=(
                                     "Sorry, I couldn’t read that file. "
                                     "Please try a clearer image or a PDF."
                                 ),
@@ -755,7 +755,7 @@ async def handle_whatsapp_event(data: dict):
                     import traceback; traceback.print_exc()
                     followups_state = state
                     followups_state.update(
-                        latest_respons="Sorry, I couldn't determine the region. Please try again.",
+                        latest_response="Sorry, I couldn't determine the region. Please try again.",
                         needs_clarification=True,
                     ) 
             
@@ -857,7 +857,7 @@ async def handle_whatsapp_event(data: dict):
                             ) + f"?senderId={sender_id}"
                             followups_state = state.copy()
                             followups_state.update(
-                                latest_respons="Create your site in 20 seconds 👇",
+                                latest_response="Create your site in 20 seconds 👇",
                                 uoc_next_message_type="link_cta",
                                 uoc_next_message_extra_data={
                                     "display_text": "Set Up Site →",
@@ -897,7 +897,7 @@ async def handle_whatsapp_event(data: dict):
                     import traceback; traceback.print_exc()
                     followups_state = state.copy()
                     followups_state.update(
-                        latest_respons="Something went wrong. Let's continue with your order.",
+                        latest_response="Something went wrong. Let's continue with your order.",
                         uoc_next_message_type="button",
                         uoc_next_message_extra_data=[
                             {"id": "edit_order", "title": "Review Order →"}
@@ -918,7 +918,7 @@ async def handle_whatsapp_event(data: dict):
             #followups_state = await UOCManager.run(state, called_by=state.get("uoc_last_called_by", "unknown"))
             save_state(sender_id, followups_state)  # Save the updated state back to Redis
             print("Webhook :::::: whatsapp_webhook::::: -- Got result from the called agent, saved the state : --: ", followups_state)
-            response_msg= followups_state.get("latest_respons", "No response available.")
+            response_msg= followups_state.get("latest_response", "No response available.")
             message_type= followups_state.get("uoc_next_message_type", "plain")
             extra_data= followups_state.get("uoc_next_message_extra_data", None)
             print("Webhook :::::: whatsapp_webhook::::: -- ******Sending message to whatsapp****** Attributes: -- ", message_type, extra_data)
@@ -940,7 +940,7 @@ async def handle_whatsapp_event(data: dict):
             if  state.get("user_category") == "VENDOR":
                 print("Calling vendor_agent directly")
                 # result = {
-                #     "latest_respons": "Hello Vendor! How can I assist you today?",
+                #     "latest_response": "Hello Vendor! How can I assist you today?",
                 #     "uoc_next_message_type": "plain",
                 #     "uoc_next_message_extra_data": None
                 # }
@@ -968,7 +968,7 @@ async def handle_whatsapp_event(data: dict):
         # Send final reply
         #response_msg = state["latest_response"] if "latest_response" in state else "No response available."
         #response_msg = result["messages"][-1]["content"] if "messages" in result else "No response available."
-        response_msg= result.get("latest_respons", "No response available.")
+        response_msg= result.get("latest_response", "No response available.")
         message_type= result.get("uoc_next_message_type", "plain")
         extra_data= result.get("uoc_next_message_extra_data", None)
         print("Webhook :::::: whatsapp_webhook:::::-- ******Sending message to whatsapp****** Attributes :", message_type, extra_data)

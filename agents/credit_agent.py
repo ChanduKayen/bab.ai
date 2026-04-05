@@ -73,7 +73,7 @@ async def run_credit_agent(state: dict,  config: dict):
         
     except Exception as e:
         print("PCredit Agent:::: run_credit_agent : failed to initialize crud ", e)
-        state["latest_respons"] = "Sorry, there was a system error. Please try again later."
+        state["latest_response"] = "Sorry, there was a system error. Please try again later."
         return state
     try:
         async with AsyncSessionLocal() as session:
@@ -82,18 +82,18 @@ async def run_credit_agent(state: dict,  config: dict):
             print("Credit Agent:::: run_credit_agent : fetched credit profile:", credit_profile)
     except Exception as e:
         print("Credit Agent:::: handle_credit_entry error:", e)
-        state["latest_respons"] = "Sorry, I couldn’t check your credit right now. Please try again."
+        state["latest_response"] = "Sorry, I couldn’t check your credit right now. Please try again."
         return state
     print("last Message", last_msg)
     
     state.update(
         intent="credit", 
-        latest_respons="Welcome to Thirtee  Credit! How can I assist you today?",
+        latest_response="Welcome to Thirtee  Credit! How can I assist you today?",
         uoc_question_type="credit",
         needs_clarification=True,
     )
     if last_msg =="routed_from_other_agent":
-        state["latest_respons"] =  ( "💳 Thirtee  Credit — India's first credit system for builders.\n\n"
+        state["latest_response"] =  ( "💳 Thirtee  Credit — India's first credit system for builders.\n\n"
                                     "Turn a material need into purchasing power in minutes:\n\n"
                                     "① Send your requirement — photo, invoice, or a simple message.\n"
                                     "② Check eligibility instantly\n"
@@ -128,7 +128,7 @@ async def run_credit_agent(state: dict,  config: dict):
     #     review_order_url = apis.get_review_order_url("https://bab-ai.com/review-order", {}, {"uuid": state["active_material_request_id"]})
     #     review_order_url_response = f"Please review your order carefully"
     #     state.update(
-    #             latest_respons=review_order_url_response,
+    #             latest_response=review_order_url_response,
     #             uoc_next_message_type="link_cta",
     #             uoc_question_type="credit_start",
     #             needs_clarification=True,
@@ -163,7 +163,7 @@ async def run_credit_agent(state: dict,  config: dict):
         #review_order_url = apis.get_review_order_url("https://bab-ai.com/review-order", {}, {"uuid": state["active_material_request_id"]})
         review_order_url = apis.get_review_order_url(os.getenv("ONBOARDING_URL"))
         print("Credit Agent:::: run_credit_agent :review_order_url", review_order_url)
-        state["latest_respons"] = msg
+        state["latest_response"] = msg
         state.update(
                 uoc_next_message_type="link_cta",
                 uoc_question_type="credit_start",
@@ -190,7 +190,7 @@ async def run_credit_agent(state: dict,  config: dict):
            "To get started, we’ll securely collect your Aadhaar, PAN, and GST details, along with your consent for verification.\n"
            "🔒 Your information will be encrypted end-to-end and shared only with our licensed and regulated credit partners, strictly for the purpose of assessing your eligibility.\n\n"
            "📜 This process follows RBI-compliant and international data protection standards")
-    state["latest_respons"] = msg 
+    state["latest_response"] = msg 
     state["uoc_question_type"] = "credit_start"
     state["needs_clarification"] = True   
     _set_buttons(state, [
@@ -208,7 +208,7 @@ async def handle_credit_onboard_start(state, crud):
     
     state.update(
         intent="credit",
-        latest_respons= "Please share your Aadhaar number.",
+        latest_response= "Please share your Aadhaar number.",
         uoc_question_type="credit_onboard_aadhaar",
         needs_clarification=True,
     )
@@ -219,13 +219,13 @@ async def handle_collect_aadhaar(state):
     aadhaar = state.get("messages", [])[-1].get("content", "").replace(" ", "")
     # Basic sanity (you’ll add proper validators / VID support)
     if not (aadhaar.isdigit() and 8 < len(aadhaar) <= 16):
-        state["latest_respons"] = "That doesn’t look like a valid Aadhaar/VID. Please re-enter."
+        state["latest_response"] = "That doesn’t look like a valid Aadhaar/VID. Please re-enter."
         state["uoc_question_type"] = "credit_onboard_aadhaar"
         return state
 
     state.setdefault("credit_profile", {})["aadhaar"] = aadhaar
     state.update(
-        latest_respons=f"Aadhaar received: {mask_id(aadhaar)}\nNow, please share your PAN.",
+        latest_response=f"Aadhaar received: {mask_id(aadhaar)}\nNow, please share your PAN.",
         uoc_question_type="credit_onboard_pan",
         needs_clarification=True,
     )
@@ -234,13 +234,13 @@ async def handle_collect_aadhaar(state):
 async def handle_collect_pan(state):
     pan = state.get("messages", [])[-1].get("content", "").strip().upper()
     if not re.match(r"^[A-Z]{5}\d{4}[A-Z]$", pan):
-        state["latest_respons"] = "That PAN doesn’t look right. Please re-enter (e.g., ABCDE1234F)."
+        state["latest_response"] = "That PAN doesn’t look right. Please re-enter (e.g., ABCDE1234F)."
         state["uoc_question_type"] = "credit_onboard_pan"
         return state
 
     state.setdefault("credit_profile", {})["pan"] = pan
     state.update(
-        latest_respons=f"PAN received: {mask_id(pan)}\nPlease share your GST number.",
+        latest_response=f"PAN received: {mask_id(pan)}\nPlease share your GST number.",
         uoc_question_type="credit_onboard_gst",
         needs_clarification=True,
     )
@@ -249,7 +249,7 @@ async def handle_collect_pan(state):
 async def handle_collect_gst(state):
     gst = state.get("messages", [])[-1].get("content", "").strip().upper()
     if not re.match(r"^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1}$", gst):
-        state["latest_respons"] = "That GST number doesn’t look valid. Please re-enter."
+        state["latest_response"] = "That GST number doesn’t look valid. Please re-enter."
         state["uoc_question_type"] = "credit_onboard_gst"
         return state
 
@@ -257,7 +257,7 @@ async def handle_collect_gst(state):
     msg = ("Last step: please provide consent to share and verify your details with our regulated credit partner.\n\n"
            "Select 'I CONSENT' option to proceed.")
     state.update(
-        latest_respons=msg,
+        latest_response=msg,
         uoc_question_type="credit_onboard_consent",
         needs_clarification=True,
     )
@@ -268,7 +268,7 @@ async def handle_collect_gst(state):
 async def handle_collect_consent(state):
     text = state.get("messages", [])[-1].get("content", "").strip().upper()
     if text not in ("I CONSENT", "CONSENT"):
-        state["latest_respons"] = "Please reply exactly 'I CONSENT' to proceed."
+        state["latest_response"] = "Please reply exactly 'I CONSENT' to proceed."
         state["uoc_question_type"] = "credit_onboard_consent"
         _set_buttons(state, [{"id": "consent", "title": "I Consent"}, {"id": "consent_reject", "title": "Reject"}, {"id": "main_menu", "title": "🏠 Main Menu"}])
         return state
@@ -282,7 +282,7 @@ async def handle_collect_consent(state):
             await credit_mgr.submit_kyc(sender_id, profile)
     except Exception as e:
         print("Credit Agent:::: submit_kyc error:", e)
-        state["latest_respons"] = "We couldn’t submit your application. Please try again."
+        state["latest_response"] = "We couldn’t submit your application. Please try again."
         return state
     latest_response=(
         "✅ Application received!\n\n"
@@ -291,7 +291,7 @@ async def handle_collect_consent(state):
         "the same local suppliers you already know and buy from, now available instantly through Thirtee ."
     )
     state.update(
-        latest_respons=latest_response,
+        latest_response=latest_response,
         uoc_next_message_extra_data=[{"id": "application_status", "title": "Application Status"},{"id": "rfq", "title": "Get Quotations"}],
         uoc_question_type="credit_start", # Send the context back to procurement agent
         needs_clarification=True,
@@ -358,7 +358,7 @@ async def handle_poll_approval(state, crud):
                 used  = float(status.get("used", 0.0))
                 available = max(0.0, limit - used)
 
-                state["latest_respons"] = (
+                state["latest_response"] = (
                     "🎉🎉Congralutions! Your Credit Request Approved!\n\n"
                     f"Available Limit: ₹{available:,.0f} \n\n"
                     "You may now proceed to pick a verified local supplier, lock your quote, and Thirtee  handles payment with bank-grade security."
@@ -378,13 +378,13 @@ async def handle_poll_approval(state, crud):
                 return state
 
             # 3) Not yet approved → keep them in pending
-            state["latest_respons"] = "Your application is still under review. I’ll keep you posted."
+            state["latest_response"] = "Your application is still under review. I’ll keep you posted."
             state["uoc_question_type"] = "credit_onboard_pending"
             return state
 
     except Exception as e:
         print("Credit Agent:::: poll_approval error:", e)
-        state["latest_respons"] = "Still checking… I’ll notify you as soon as there’s an update."
+        state["latest_response"] = "Still checking… I’ll notify you as soon as there’s an update."
         return state
 async def handle_credit_portal(state, crud, latest_response: str, extra=None):
     """
@@ -402,10 +402,10 @@ async def handle_credit_portal(state, crud, latest_response: str, extra=None):
         )
     except Exception as e:
         print("Credit Agent:::: credit_portal URL error:", e)
-        state["latest_respons"] = "Couldn’t open the credit portal. Please try again."
+        state["latest_response"] = "Couldn’t open the credit portal. Please try again."
         return state
 
-    state["latest_respons"] = "Opening your credit & vendors page…"
+    state["latest_response"] = "Opening your credit & vendors page…"
     _link_cta(state, "View Credit & Vendors", credit_url)
     state["uoc_question_type"] = "credit"
     return state
@@ -416,7 +416,7 @@ async def handle_vendor_confirm(state, crud, latest_response: str, extra=None):
     """
     vendor_id = state.get("selected_vendor_id")  # set by your webview callback
     if not vendor_id:
-        state["latest_respons"] = "Please select a vendor in the portal to continue."
+        state["latest_response"] = "Please select a vendor in the portal to continue."
         _set_buttons(state, [{"id": "credit_view_portal", "title": "Open Credit Portal"}])
 
 async def handle_kyc_cancel(state, crud):
@@ -425,7 +425,7 @@ async def handle_kyc_cancel(state, crud):
     """
     state.update(
         intent="main_menu",
-        latest_respons="KYC onboarding cancelled. How can I assist you today?",
+        latest_response="KYC onboarding cancelled. How can I assist you today?",
         uoc_question_type="main_menu",
         needs_clarification=False,
     )

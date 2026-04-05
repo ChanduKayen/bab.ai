@@ -247,7 +247,7 @@ async def handle_chit_chat(state: dict, llm: ChatOpenAI | None = None) -> dict:
     line = _one_emoji(_cap_len(line, 120))
 
     # Update state with reply + procurement CTAs
-    state["latest_respons"] = line
+    state["latest_response"] = line
     state["uoc_next_message_type"] = "button"
     state["uoc_question_type"] = "procurement_new_user_flow"
     state["needs_clarification"] = True
@@ -278,7 +278,7 @@ async def handle_help(state: AgentState, crud: ProcurementCRUD, uoc_next_message
 
         state.update(
             intent="help",
-            latest_respons=help_message,
+            latest_response=help_message,
             uoc_next_message_type="button",
             uoc_question_type="procurement_new_user_flow",
             needs_clarification=True,
@@ -297,7 +297,7 @@ async def handle_help(state: AgentState, crud: ProcurementCRUD, uoc_next_message
     except Exception as e:
         print("❌ Procurement Agent:::: handle_help : Error sending tutorial:", e)
         state.update(
-            latest_respons="Sorry, I couldn't fetch the tutorial right now. Please try again later.",
+            latest_response="Sorry, I couldn't fetch the tutorial right now. Please try again later.",
             uoc_next_message_type="plain",
             uoc_question_type="procurement_new_user_flow",
             needs_clarification=True
@@ -437,7 +437,7 @@ async def handle_siteops(state: AgentState, crud: ProcurementCRUD, uoc_next_mess
     #handle a message here 
     state.update(
         intent="siteops",
-        latest_respons="Got it! Please share a photo of your site so I can assist you better.", 
+        latest_response="Got it! Please share a photo of your site so I can assist you better.", 
         uoc_next_message_type="button",
         uoc_question_type="siteops_welcome",
         needs_clarification=True,  
@@ -450,7 +450,7 @@ async def handle_siteops(state: AgentState, crud: ProcurementCRUD, uoc_next_mess
 async def handle_main_menu(state: AgentState, crud: ProcurementCRUD,  uoc_next_message_extra_data=None) -> AgentState:
     state.update(
         intent="random",
-        latest_respons="Welcome back! How can I assist you today?",
+        latest_response="Welcome back! How can I assist you today?",
         uoc_next_message_type="button",
         uoc_question_type="siteops_welcome",
         needs_clarification=True,   
@@ -465,7 +465,7 @@ async def handle_procurement(state: AgentState, crud: ProcurementCRUD,  uoc_next
     """
     state.update(
         intent="procurement",
-        latest_respons="Got it! What materials are you looking for? You can send a message or an image.",
+        latest_response="Got it! What materials are you looking for? You can send a message or an image.",
         uoc_next_message_type="button",
         uoc_question_type="procurement",
         needs_clarification=True,
@@ -486,7 +486,7 @@ async def handle_rfq(state: AgentState, crud: ProcurementCRUD, latest_response: 
 
     state.update(
         intent="rfq",
-        latest_respons=review_order_url_response,
+        latest_response=review_order_url_response,
         uoc_next_message_type="link_cta",
         uoc_question_type="procurement_new_user_flow",
         needs_clarification=True,
@@ -528,7 +528,7 @@ _You’ll be taken to a secure Thirtee page - review your order, compare manufac
 
      state.update(
         intent="rfq",
-        latest_respons=review_order_url_response,
+        latest_response=review_order_url_response,
         uoc_next_message_type="link_cta",
         uoc_question_type="procurement_new_user_flow",
         needs_clarification=True,
@@ -544,7 +544,7 @@ async def handle_photo_upload_flow(state: AgentState, crud: ProcurementCRUD, uoc
         user_name = state.get("user_full_name", "there")
         state.update(
             intent="procurement",
-            latest_respons=(
+            latest_response=(
                 f"Great! Please share your requirement here.\n"
                 "📷 A photo of material list, handwritten notes, or even your voice note works perfect."
             ), 
@@ -585,7 +585,7 @@ _You will be taken to your dashboard where you can review all your quotations:_
 
      state.update(
         intent="rfq",
-        latest_respons=review_order_url_response,
+        latest_response=review_order_url_response,
         uoc_next_message_type="link_cta",
         uoc_question_type="procurement_new_user_flow",
         needs_clarification=True,
@@ -636,7 +636,7 @@ async def handle_project_selection(state: AgentState, items: list) -> AgentState
     if len(projects) == 0:
         # No existing projects — ask for site name as plain text
         state.update(
-            latest_respons="Quick one — what site is this for? (e.g. Kakinada flat, Rajahmundry villa)",
+            latest_response="Quick one — what site is this for? (e.g. Kakinada flat, Rajahmundry villa)",
             uoc_next_message_type="button",
             uoc_next_message_extra_data=[
                 {"id": "skip_project", "title": "Skip →"}
@@ -657,7 +657,7 @@ async def handle_project_selection(state: AgentState, items: list) -> AgentState
         if len(buttons) < 3:
             buttons.append({"id": "skip_project", "title": "Skip →"})
         state.update(
-            latest_respons="Which site is this for?",
+            latest_response="Which site is this for?",
             uoc_next_message_type="button",
             uoc_next_message_extra_data=buttons[:3],  # WhatsApp max 3 buttons
             uoc_question_type="project_name_input",
@@ -674,7 +674,7 @@ async def handle_project_selection(state: AgentState, items: list) -> AgentState
             })
         buttons.append({"id": "new_project", "title": "New Site"})
         state.update(
-            latest_respons="Which site is this for?",
+            latest_response="Which site is this for?",
             uoc_next_message_type="button",
             uoc_next_message_extra_data=buttons[:3],
             uoc_question_type="project_name_input",
@@ -691,7 +691,7 @@ async def new_user_flow(state: AgentState, crud: ProcurementCRUD  ) -> AgentStat
     user_name = state.get("user_full_name", "There")
     sender_id = state["sender_id"]
     uoc_next_message_extra_data = state.get("uoc_next_message_extra_data", [])
-    latest_response = state.get("latest_respons", None)
+    latest_response = state.get("latest_response", None)
     # Handle vendor acknowledgement buttons without changing webhook
     if last_msg in ("vendor_confirm", "vendor_cannot_fulfill"):
         ctx = state.get("vendor_ack_context", {}) or {}
@@ -699,7 +699,7 @@ async def new_user_flow(state: AgentState, crud: ProcurementCRUD  ) -> AgentStat
         ven_id = ctx.get("vendor_id")
         if not req_id or not ven_id:
             state.update({
-                "latest_respons": "Context missing for this action. Please try again later.",
+                "latest_response": "Context missing for this action. Please try again later.",
                 "uoc_next_message_type": "plain",
                 "needs_clarification": False,
             })
@@ -725,7 +725,7 @@ async def new_user_flow(state: AgentState, crud: ProcurementCRUD  ) -> AgentStat
                     if user_id:
                         await notify_user_vendor_confirmed(user_id=user_id, request_id=str(req_id))
                     state.update({
-                        "latest_respons": "Thanks! Order confirmed. We will coordinate delivery.",
+                        "latest_response": "Thanks! Order confirmed. We will coordinate delivery.",
                         "uoc_next_message_type": "plain",
                         "needs_clarification": False,
                     })
@@ -735,14 +735,14 @@ async def new_user_flow(state: AgentState, crud: ProcurementCRUD  ) -> AgentStat
                     if user_id:
                         await notify_user_vendor_declined(user_id=user_id, request_id=str(req_id))
                     state.update({
-                        "latest_respons": "Acknowledged. We’ve informed the buyer you can’t fulfill.",
+                        "latest_response": "Acknowledged. We’ve informed the buyer you can’t fulfill.",
                         "uoc_next_message_type": "plain",
                         "needs_clarification": False,
                     })
         except Exception as e:
             print("procurement_agent ::::: vendor ack flow exception:", e)
             state.update({
-                "latest_respons": "Sorry, something went wrong processing your response.",
+                "latest_response": "Sorry, something went wrong processing your response.",
                 "uoc_next_message_type": "plain",
                 "needs_clarification": False,
             })
@@ -778,7 +778,7 @@ async def new_user_flow(state: AgentState, crud: ProcurementCRUD  ) -> AgentStat
 "What would you like to do now?"
             )
            
-            state["latest_respons"] = greeting_message
+            state["latest_response"] = greeting_message
             state["uoc_next_message_type"] = "button"
             state["uoc_question_type"] = "procurement_new_user_flow"
             state["uoc_confidence"]="low"
@@ -811,7 +811,7 @@ async def new_user_flow(state: AgentState, crud: ProcurementCRUD  ) -> AgentStat
 
         if not items:
             state.update(
-                latest_respons="Couldn't read that clearly. Try a clearer photo or type the items.",
+                latest_response="Couldn't read that clearly. Try a clearer photo or type the items.",
                 uoc_next_message_type="plain",
                 needs_clarification=True,
                 agent_first_run=True,
@@ -873,7 +873,7 @@ async def new_user_flow(state: AgentState, crud: ProcurementCRUD  ) -> AgentStat
             print("Procurement Agent:::: new_user_flow : persist_procurement completed: ", state.get("active_material_request_id", None))
         except Exception as e:
             print("Procurement Agent:::: new_user_flow : Error in persist_procurement:", e)
-            state["latest_respons"] = "Sorry, there was an error saving your procurement request. Please try again later."
+            state["latest_response"] = "Sorry, there was an error saving your procurement request. Please try again later."
             return state
         
         try:
@@ -899,7 +899,7 @@ async def new_user_flow(state: AgentState, crud: ProcurementCRUD  ) -> AgentStat
             msg = f"{hint}\n\n{base_msg}" if hint else base_msg
 
             state.update(
-                latest_respons=msg,
+                latest_response=msg,
                 uoc_next_message_type="button",
                 uoc_next_message_extra_data=[
                     {"id": "edit_order", "title": "Review & Select Vendors →"}
@@ -938,14 +938,14 @@ async def new_user_flow(state: AgentState, crud: ProcurementCRUD  ) -> AgentStat
                     return await classify_and_respond(state, config={"configurable": {"crud": crud}})
         elif latest_msg_intent == "siteops":
                     latest_response = "📷 Ready to check your site? Let's continue!"
-                    state["latest_respons"]=latest_response
+                    state["latest_response"]=latest_response
                     state["uoc_next_message_extra_data"] = [{"id": "siteops", "title": "📁 Site Setup"}]
                     state["uoc_question_type"] = "siteops_welcome"
                     state["needs_clarification"] =True
                     return state
         elif latest_msg_intent == "procurement":
                     latest_response = "🧱 Tell me what materials you're looking for, and I'll fetch quotes!"
-                    state["latest_respons"]=latest_response
+                    state["latest_response"]=latest_response
                     state["uoc_next_message_type"]="button"
                     state["uoc_next_message_extra_data"] = [{"id": "procurement", "title": "📦 Continue Procurement"}]
                     state["uoc_question_type"] = "siteops_welcome"
@@ -954,14 +954,14 @@ async def new_user_flow(state: AgentState, crud: ProcurementCRUD  ) -> AgentStat
                  
                     #state["messages"][-1]["content"] ="routed_from_other_agent" # its sub route
                     latest_response= "This is credit section"
-                    state["latest_respons"]=latest_response
+                    state["latest_response"]=latest_response
                     state["uoc_next_message_type"]="button"
                     state["uoc_next_message_extra_data"] = [{"id": "routed_from_other_agent", "title": "Buy With Credit"}] # This is treated as the last message in credit agent
                     state["uoc_question_type"] = "credit_start"
                     state["needs_clarification"] =True
                  
         else:   
-                    state["latest_respons"] = (
+                    state["latest_response"] = (
                         "🤔 I'm not sure what you're looking for. "
                         "Please choose an option below."
                     )
@@ -1016,7 +1016,7 @@ You are Thirtee , an expert AI procurement assistant for construction profession
         state.update({
             "needs_clarification": True,
             "proc_confidence": "low",
-            "latest_respons": "Sorry, I couldn’t read that. Could you please re-phrase?"
+            "latest_response": "Sorry, I couldn’t read that. Could you please re-phrase?"
         })
         return state
 
@@ -1027,7 +1027,7 @@ You are Thirtee , an expert AI procurement assistant for construction profession
 
     # COPY CONTROL FIELDS
     state.update({
-        "latest_respons": parsed["latest_respons"],
+        "latest_response": parsed["latest_response"],
         "proc_next_message_type": parsed.get("next_message_type", "plain"),
         "proc_next_message_extra_data": parsed.get("next_message_extra_data"),
         "needs_clarification": parsed.get("needs_clarification", True),
@@ -1044,7 +1044,7 @@ You are Thirtee , an expert AI procurement assistant for construction profession
     if user_message == "main_menu" or not state["needs_clarification"]:
         print("procurement_agent :::: collect_procurement_details_interactively :::: User exited or confirmed procurement details.")
         sender_id = state.get("sender_id")
-        quick_msg = parsed.get("latest_respons", "Procurement details completed. You can now proceed with your order.")
+        quick_msg = parsed.get("latest_response", "Procurement details completed. You can now proceed with your order.")
         whatsapp_output(sender_id, quick_msg, message_type="plain")
         state["needs_clarification"] = False
         state["uoc_confidence"] = "high" if updated_details else "low"
@@ -1115,7 +1115,7 @@ async def run_procurement_agent(state: dict,  config: dict) -> dict:
         procurement_mgr = ProcurementManager(crud)
     except Exception as e:
         print("Procurement Agent:::: run_procurement_agent : failed to initialize crud or UOCManager:", e)
-        state["latest_respons"] = "Sorry, there was a system error. Please try again later."
+        state["latest_response"] = "Sorry, there was a system error. Please try again later."
         return state
     
     
@@ -1165,7 +1165,7 @@ async def run_procurement_agent(state: dict,  config: dict) -> dict:
         if total == 0:
             msg = "No orders yet. Send a photo or type your material list to get started."
             state.update(
-                latest_respons=msg,
+                latest_response=msg,
                 uoc_next_message_type="button",
                 uoc_next_message_extra_data=[{"id": "guided_photo_upload", "title": "📷 New Requirement"}],
                 needs_clarification=True,
@@ -1179,7 +1179,7 @@ async def run_procurement_agent(state: dict,  config: dict) -> dict:
             summary = "\n".join(lines) if lines else "No recent activity."
             msg = f"Here are your recent orders:\n\n{summary}"
             state.update(
-                latest_respons=msg,
+                latest_response=msg,
                 uoc_next_message_type="button",
                 uoc_next_message_extra_data=[
                     {"id": "view_dashboard", "title": "View All Orders 📋"},
@@ -1202,12 +1202,12 @@ async def run_procurement_agent(state: dict,  config: dict) -> dict:
 
         except Exception as e:
             print("Procurement Agent:::: run_procurement_agent : failed to update user category in DB:", e)
-            state["latest_respons"] = "Sorry, there was a system error. Please try again later."
+            state["latest_response"] = "Sorry, there was a system error. Please try again later."
         
         state["uoc_next_message_type"] = "button"
         state["uoc_question_type"] = "procurement_new_user_flow"
         if state["user_category"] == "builder":
-            state["latest_respons"] = """👋 *Welcome to Thirtee, Builder!*  
+            state["latest_response"] = """👋 *Welcome to Thirtee, Builder!*  
 Here I help builders like you connect with manufacturers effortlessly, instantly, and right at your fingertips.
 
 You’re now set up as a *Builder*. Let’s get your first requirement rolling.
@@ -1218,7 +1218,7 @@ You’re now set up as a *Builder*. Let’s get your first requirement rolling.
             state["needs_clarification"] = True
             
         else:
-            state["latest_respons"] = """👋 *Welcome to Thirtee!* — where vendors connect directly with builders"""
+            state["latest_response"] = """👋 *Welcome to Thirtee!* — where vendors connect directly with builders"""
             state["uoc_question_type"] = "vendor_new_user_flow"
             state["uoc_next_message_extra_data"] = [
                 {"id": "vendor_onboarding", "title": "🏭 Vendor Onboarding"}
@@ -1234,7 +1234,7 @@ Before we proceed would you let me know if you are a *Builder* looking for mater
 
 _This information helps me personalise your experience_"""
 
-        state["latest_respons"] = message
+        state["latest_response"] = message
         state["uoc_next_message_type"] = "button"
         state["uoc_question_type"] = "procurement_new_user_flow"
         state["needs_clarification"] = True
@@ -1252,7 +1252,7 @@ _This information helps me personalise your experience_"""
             procurement_mgr = ProcurementManager(session)
     except Exception as e:
         print("Procurement Agent:::: run_procurement_agent : failed to initialize session:", e)
-        state["latest_respons"] = "Sorry, there was a system error. Please try again later."
+        state["latest_response"] = "Sorry, there was a system error. Please try again later."
         return state
     if user_stage == "new":
         print("Procurement agent :::: run_procurement_agent :::: User is new, setting up procurement stage")

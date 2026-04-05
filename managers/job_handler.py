@@ -29,7 +29,7 @@ async def handle_job(state: dict, crud: Optional[DatabaseCRUD] = None):
     if material_result.get("needs_clarification"):
         print("job_handler:::handle_job::: Material clarification needed")
         state.update({
-            "latest_respons": material_result["followup"],
+            "latest_response": material_result["followup"],
             "needs_clarification": True,
             "uoc_question_type": "task_material_details",
             "uoc_next_message_type": "plain"
@@ -41,7 +41,7 @@ async def handle_job(state: dict, crud: Optional[DatabaseCRUD] = None):
     if worker_result.get("needs_clarification"):
         print("job_handler:::handle_job::: Worker clarification needed")
         state.update({
-            "latest_respons": worker_result["followup"],
+            "latest_response": worker_result["followup"],
             "needs_clarification": True,
             "uoc_question_type": "task_worker_details",
             "uoc_next_message_type": "plain"
@@ -74,6 +74,6 @@ async def handle_job(state: dict, crud: Optional[DatabaseCRUD] = None):
         print(f"Error while logging job: {e}")
         return {"error": "Failed to save job"}
 
-    state["latest_respons"] = f"Job update saved under task ID {task_id}"
+    state["latest_response"] = f"Job update saved under task ID {task_id}"
     state["job_saved"] = True
     return state

@@ -154,7 +154,7 @@ async def notify_user_quote_ready(
     url = _quote_summary_url(request_id)
     state.update(
         intent="rfq",
-        latest_respons= "\n".join(message_lines),
+        latest_response= "\n".join(message_lines),
         uoc_next_message_type="link_cta",
         uoc_question_type="quote_request",
         uoc_next_message_extra_data= {"display_text": "Choose Vendors Quotes", "url": url} if url else None,
@@ -332,13 +332,13 @@ async def handle_quote_flow(
     state["uoc_question_type"] = "quote_request"
 
     if notified_labels:
-        state["latest_respons"] = (
+        state["latest_response"] = (
             "Quote requests sent for "
             f"{_format_project_line(project_name, project_location)} to: "
             f"{', '.join(notified_labels)}. We'll let you know as responses arrive."
         )
     else:
-        state["latest_respons"] = (
+        state["latest_response"] = (
             "We could not reach any vendors for this request yet. "
             "We'll notify you as soon as we do."
         )

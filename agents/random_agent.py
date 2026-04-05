@@ -246,7 +246,7 @@ async def handle_siteops(state: AgentState, latest_response: str, config: dict,
         state["messages"][-1]["content"] = ""
     state.update(
         intent="siteops",
-        latest_respons=latest_response,
+        latest_response=latest_response,
         uoc_next_message_type="button",
         uoc_question_type="onboarding",
         needs_clarification=True,
@@ -261,7 +261,7 @@ async def handle_procurement(state: AgentState, latest_response: str, config: di
         state["messages"][-1]["content"] = ""
     state.update(
         intent="procurement",
-        latest_respons=latest_response,
+        latest_response=latest_response,
         uoc_next_message_type="button",
         uoc_question_type="procurement_new_user_flow",
         needs_clarification=True,
@@ -275,7 +275,7 @@ async def handle_rfq(state: AgentState, latest_response: str, config: dict,
         state["messages"][-1]["content"] = "guided_photo_upload"
     state.update(
         intent="procurement",
-        latest_respons=latest_response,
+        latest_response=latest_response,
         uoc_next_message_type="button",
         uoc_question_type="procurement_new_user_flow",
         needs_clarification=True,
@@ -290,7 +290,7 @@ async def handle_credit(state: AgentState, latest_response: str, config: dict,
         state["messages"][-1]["content"] = "routed_from_random_agent"
     state.update(
         intent="credit",
-        latest_respons=latest_response,
+        latest_response=latest_response,
         uoc_next_message_type="plain",
         uoc_question_type="credit",
         needs_clarification=True,
@@ -309,7 +309,7 @@ async def handle_main_menu(state: AgentState, latest_response: str, config: dict
                            uoc_next_message_extra_data: Optional[Dict[str, str]]=None) -> AgentState:
     state.update(
         intent="random",
-        latest_respons=latest_response or "Welcome back! How can I assist you today?",
+        latest_response=latest_response or "Welcome back! How can I assist you today?",
         uoc_next_message_type="button",
         uoc_question_type="onboarding",
         needs_clarification=True,
@@ -439,7 +439,7 @@ async def classify_and_respond(state: AgentState, config: Optional[Dict[str, Any
         intent = "random"
     print("Random Agent::: Classify and respond ::: Called --------- ", intent)
     if last_lower in _HANDLER_MAP:
-        return await _HANDLER_MAP[last_lower](state, latest_response=state.get("latest_respons", ""), config=config)
+        return await _HANDLER_MAP[last_lower](state, latest_response=state.get("latest_response", ""), config=config)
     elif last_msg.lower() == "builder_user" or last_msg.lower() == "vendor_user":
         state["user_category"] = "builder" if last_msg.lower() == "builder_user" else "vendor"
         print(f"Random Agent:::: run_radom_agent : User category set to {state['user_category']}")
@@ -450,14 +450,14 @@ async def classify_and_respond(state: AgentState, config: Optional[Dict[str, Any
 
         except Exception as e:
             print("Random Agent::: Classify and respond  : failed to update user category in DB:", e)
-            state["latest_respons"] = "Sorry, there was a system error. Please try again later."
+            state["latest_response"] = "Sorry, there was a system error. Please try again later."
         
         state["uoc_next_message_type"] = "button"
         state["uoc_question_type"] = "onboarding"
         if state["user_category"] == "builder":
             image_path = "C:/Users/koppi/OneDrive/Desktop/Thirtee/Marketing/builder_welcome.png"
             media_id = upload_media_from_path( image_path, "image/jpeg")
-            state["latest_respons"] = """👋 *Welcome to Thirtee, Builder!*  
+            state["latest_response"] = """👋 *Welcome to Thirtee, Builder!*  
 Here I help builders like you connect with manufacturers effortlessly, instantly, and right at your fingertips.
 
 You’re now set up as a *Builder*. Let’s get your first requirement rolling.
@@ -479,7 +479,7 @@ You’re now set up as a *Builder*. Let’s get your first requirement rolling.
             state["needs_clarification"] = True
             
         else:
-            state["latest_respons"] = """👋 *Welcome to Thirtee, Supplier!* — where vendors connect directly with builders"""
+            state["latest_response"] = """👋 *Welcome to Thirtee, Supplier!* — where vendors connect directly with builders"""
             state["uoc_question_type"] = "vendor_new_user_flow"
             state["uoc_next_message_extra_data"] = [
                 {"id": "vendor_onboarding", "title": "🏭 Vendor Onboarding"}
@@ -497,7 +497,7 @@ Before we proceed would you let me know if you are a *Builder* looking for mater
 
 _This information helps me personalise your experience_"""
 
-        state["latest_respons"] = message
+        state["latest_response"] = message
         state["uoc_next_message_type"] = "button"
         state["uoc_question_type"] = "onboarding"
         state["needs_clarification"] = True
@@ -514,7 +514,7 @@ _This information helps me personalise your experience_"""
     image_present = bool(state.get("image_path"))
     if (not last_msg and not re.search(r"\w", last_msg or "")) and not image_present:
         state.update(
-            latest_respons="🙂 Need material quotes or site help? Just share a photo — Thirtee  will collect quotations directly from manufacturers.",
+            latest_response="🙂 Need material quotes or site help? Just share a photo — Thirtee  will collect quotations directly from manufacturers.",
             uoc_next_message_type="button",
             uoc_next_message_extra_data=[{"id": "siteops", "title": "🏗 Manage My Site"}],
         )
@@ -525,7 +525,7 @@ _This information helps me personalise your experience_"""
             username = state.get("user_full_name", "there")
             greeting_message = f"Hello {username}! 👋 Just share a photo of what you need — Thirtee  will get quotations directly from manufacturers for you." # --- NO need of LLM Call here
             state.update(
-                latest_respons= greeting_message,
+                latest_response= greeting_message,
                 uoc_next_message_type="button",
                 uoc_question_type="onboarding",
                 needs_clarification=True,
@@ -569,7 +569,7 @@ _This information helps me personalise your experience_"""
 
                 # Update state for WhatsApp UI (button with one clear action)
                 state.update(
-                    latest_respons=msg,
+                    latest_response=msg,
                     uoc_next_message_type="button",
                     uoc_question_type="onboarding",
                     needs_clarification=True,
@@ -602,7 +602,7 @@ _This information helps me personalise your experience_"""
                 last = _last_user_text(state)
                 cta_choice = _quick_cta_from_text(last, state)
                 state.update(
-                    latest_respons="Noted. Try this next?",
+                    latest_response="Noted. Try this next?",
                     uoc_next_message_type="button",
                     uoc_question_type=cta_choice["id"],
                     needs_clarification=True,
