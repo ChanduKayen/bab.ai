@@ -275,7 +275,7 @@ async def handle_rfq(state: AgentState, latest_response: str, config: dict,
         state["messages"][-1]["content"] = "guided_photo_upload"
     state.update(
         intent="procurement",
-        latest_response=latest_response,
+        latest_respons=latest_response,
         uoc_next_message_type="button",
         uoc_question_type="procurement_new_user_flow",
         needs_clarification=True,

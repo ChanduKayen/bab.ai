@@ -477,6 +477,7 @@ async def handle_whatsapp_event(data: dict):
                     confirm_msg = "✅ Request sent. I'll notify you when vendors respond."
                 state["needs_clarification"] = True
                 state["uoc_question_type"] = "procurement_new_user_flow"
+                state["builder_mode"] = "followup"
                 save_state(sender_id, state)
                 whatsapp_output(sender_id, confirm_msg, message_type="button",
                                 extra_data=[{"id": "view_dashboard", "title": "View Orders 📋"}])

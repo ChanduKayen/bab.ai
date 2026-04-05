@@ -41,4 +41,3 @@ class AgentState(TypedDict):
 
     #credit_id:Optional[str]
     builder_mode: Optional[str]           # "idle" | "followup" | "comparing" | "casual"
-    show_dashboard_button: Optional[bool]   
