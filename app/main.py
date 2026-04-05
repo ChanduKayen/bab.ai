@@ -3,6 +3,8 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import text
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from jobs.vendor_followup import process_vendor_nudges
 
 from app.config import Settings
 from app.db import get_engine, get_sessionmaker, Base
@@ -30,7 +32,17 @@ async def lifespan(app: FastAPI):
     # dev-only: create tables
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+    scheduler = AsyncIOScheduler()
+    scheduler.add_job(
+        process_vendor_nudges,
+        trigger="interval",
+        minutes=15,
+        id="vendor_nudge_job",
+        replace_existing=True,
+    )
+    scheduler.start()
     yield
+    scheduler.shutdown()
 
 app = FastAPI(title=settings.APP_NAME, lifespan=lifespan)
 

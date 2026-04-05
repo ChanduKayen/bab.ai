@@ -234,11 +234,11 @@ async def generate_engaged_user_greeting(user_name: str) -> str:
 async def generate_trusted_user_greeting(user_name: str) -> str:
     res = await _ainvoke(llm, [SystemMessage(content=TRUSTED_USER_PROMPT),
                                HumanMessage(content=f"The user's name is {user_name}.")])
-    return res.content.strip()
+    return res.content.strip() 
 
 # ------------------------------------------------------------------
 # Button handlers (downstream)
-# ------------------------------------------------------------------
+# ------------------------------------------------------------------o
 async def handle_siteops(state: AgentState, latest_response: str, config: dict,
                          uoc_next_message_extra_data: Optional[Dict[str, str]]=None) -> AgentState:
     # Clear user text so SiteOps agent treats next turn as fresh
@@ -351,13 +351,23 @@ def _cap_len(msg: str, limit: int = 120) -> str:
 
 
 def _last_user_text(state: AgentState) -> str: 
-    if not state.get("messages"):
+    if not state.get("messages"): 
         return "" 
     return (state["messages"][-1].get("content") or "").strip()
-      
-    for m in hist[-limit:]:
+
+def _history_snippet(state: AgentState, limit: int = 6) -> str:
+    """
+    Build a short conversation snippet from the most recent messages for the LLM prompt.
+    Each non-empty message is truncated to 160 chars and prefixed with a dash.
+    """
+    messages = state.get("messages") or []
+    if not messages:
+        return ""
+
+    lines = []
+    for m in messages[-limit:]:
         text = (m.get("content") or "").strip()
-        if not text:
+        if not text: 
             continue
         lines.append(f"- {_cap_len(text, 160)}")
     return "\n".join(lines)
@@ -370,7 +380,7 @@ async def generate_conversational_reply_with_cta(state: AgentState) -> Dict[str,
         f"Recent conversation (most recent last):\n{history}\n\n"
         f"User's latest message:\n\"\"\"{last}\"\"\"\n\n"
         "Follow the schema strictly."
-    )
+    ) 
     res = await llm.ainvoke([
         SystemMessage(content=CONVERSATION_SYSTEM_PROMPT + "\n\n" + CONVERSATION_JSON_PROMPT),
         HumanMessage(content=prompt)

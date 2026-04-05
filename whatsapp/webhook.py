@@ -383,6 +383,8 @@ async def transcribe_with_whisper(state: dict):
     #     return state
 
 async def handle_whatsapp_event(data: dict):
+    result = {} #Added with claud
+    followups_state = {} #Added with claud
     try:
         logger.info("Entered Webhook route")
         #data = await request.json()

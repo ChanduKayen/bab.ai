@@ -35,7 +35,7 @@ class ProcurementManager:
                 return []
         # If wrapped like {"materials":[...]} or {"items":[...]}
         if isinstance(obj, dict):
-            obj = obj.get("materials") or obj.get("items") or obj.get("data") or []
+            obj = obj.get("materials") or obj.get("items") or obj.get("data") or [] 
         # Ensure list
         if not isinstance(obj, list):
             obj = [obj]
@@ -51,7 +51,7 @@ class ProcurementManager:
         return out
 
 
-    async def persist_procurement(self, state: dict):
+    async def persist_procurement(self, state: dict): 
         """
         Persist the initially extracted materials into DB when user starts a procurement request.
         Robust to JSON-strings and mixed types.

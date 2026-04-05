@@ -33,6 +33,7 @@ orjson>=3.10,<4                # FastAPI response serialization (optional but pr
 rapidfuzz>=3.0,<4.0            # used in managers.uoc_manager
 pillow>=10.0,<11               # PIL for content_card image generation
 certifi>=2024.7.4,<2026        # up-to-date CA bundle for SSL/TLS (asyncpg + Windows/App Runner)
+apscheduler>=3.10,<4
 
 # ── Safe optionals (comment in if/when you use them) ─────────────────────────
 redis>=5.0,<6                # you referenced Redis in comments; enable if using it

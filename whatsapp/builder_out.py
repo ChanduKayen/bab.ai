@@ -441,10 +441,10 @@ def send_typing_indicator_meta(to_message_id: str):
         "message_id": to_message_id,
         "typing_indicator": {
             "type": "text"  # tells Meta to display "typing…" for text reply
-        },
+        }, 
     }
 
-    print(f"💬 Sending typing indicator for message_id={to_message_id}...")
+    print(f"💬 Sending typing indicator for message_id={to_message_id}...") 
     response = requests.post(url, headers=headers, json=payload, timeout=10)
     print(f"📥 Response: {response.status_code} {response.text}")
 

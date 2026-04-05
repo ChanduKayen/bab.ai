@@ -733,7 +733,16 @@ async def new_user_flow(state: AgentState, crud: ProcurementCRUD  ) -> AgentStat
                 work_coro=extract_materials(combined, img_b64),
                 first_nudge_after=8,  # seconds
             )
-         
+
+        if not items:
+            state.update(
+                latest_respons="Couldn't read that clearly. Try a clearer photo or type the items.",
+                uoc_next_message_type="plain",
+                needs_clarification=True,
+                agent_first_run=True,
+            )
+            return state
+
         state.setdefault("procurement_details", {})["materials"] = items
         print("Procurement Agent:::: new_user_flow : extracted materials:", state["procurement_details"]["materials"])
         
