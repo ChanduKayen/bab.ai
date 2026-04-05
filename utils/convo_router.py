@@ -19,7 +19,8 @@ ALLOWED = {
     "quote_followup",     # track / modify / compare / issue — all post-quote actions
     #"status",             # track order status by order ID
     "upload",             # photo/invoice/BOQ intake that drafts an order
-    "help"                # quick Qs about process/pricing without details yet
+    "help",               # quick Qs about process/pricing without details yet
+    "order_status",       # fast-path order/quote lookup
   ],
 #   "credit": [
 #     "limit_or_kyc",       # check eligibility/limit or start KYC (same entry path)
@@ -364,7 +365,21 @@ async def route_and_respond(state: Dict[str, Any]) -> Dict[str, Any]:
         intent, context = FALLBACK["intent"], FALLBACK["context"]
         await _apply_state(state, intent, context, {}, required=[])
         return state
-    
+
+    # Fast path — order lookup keywords, skip LLM
+    ORDER_KEYWORDS = {"orders", "order", "status", "quotes", "update",
+                      "track", "pending", "kya hua", "what happened"}
+    if set(user_msg_text.lower().split()) & ORDER_KEYWORDS:
+        intent = "procurement"
+        context = "order_status"
+        state["intent_context"] = context
+        state["last_known_intent"] = "procurement"
+        from agents.procurement_agent import run_procurement_agent
+        async with AsyncSessionLocal() as session:
+            from database.procurement_crud import ProcurementCRUD
+            crud = ProcurementCRUD(session)
+            return await run_procurement_agent(state, config={"configurable": {"crud": crud}})
+
     # If image/doc present, pre-seed slots
     image_seed = {}
     if user_msg_type == "image" or state.get("image_path"):

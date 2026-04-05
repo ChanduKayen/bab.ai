@@ -15,7 +15,8 @@ AsyncSessionLocal = get_sessionmaker()
 from database.procurement_crud import ProcurementCRUD
 from database.uoc_crud import DatabaseCRUD as UocCRUD
 from database.sku_crud import SkuCRUD
-from database.models import RequestStatus
+from database.models import RequestStatus, QuoteRequestVendor, QuoteRequestVendorStatus
+from sqlalchemy import func, select
 from managers.quotation_handler import (
     handle_quote_flow,
     notify_user_vendor_quote_update,
@@ -223,14 +224,37 @@ async def vendor_quote_response(payload: VendorQuoteResponse):
                 user_id = await crud.get_sender_id_from_request(str(payload.request_id))
             vendor_name = getattr(vendor_record, "name", None)
 
-        await notify_user_vendor_quote_update(
-            user_id=user_id,
-            vendor_name=vendor_name,
-            request_id=str(payload.request_id),
-            project_name=summary.get("project_name") if summary else None,
-            project_location=summary.get("project_location") if summary else None,
-            is_update=had_existing,
-        )
+            await notify_user_vendor_quote_update(
+                user_id=user_id,
+                vendor_name=vendor_name,
+                request_id=str(payload.request_id),
+                project_name=summary.get("project_name") if summary else None,
+                project_location=summary.get("project_location") if summary else None,
+                is_update=had_existing,
+            )
+
+            # Check if all vendors have now responded
+            try:
+                invited_count_result = await session.execute(
+                    select(func.count()).select_from(QuoteRequestVendor)
+                    .where(QuoteRequestVendor.quote_request_id == payload.request_id)
+                )
+                invited_count = invited_count_result.scalar() or 0
+
+                responded_count_result = await session.execute(
+                    select(func.count()).select_from(QuoteRequestVendor)
+                    .where(
+                        QuoteRequestVendor.quote_request_id == payload.request_id,
+                        QuoteRequestVendor.status == QuoteRequestVendorStatus.RESPONDED,
+                    )
+                )
+                responded_count = responded_count_result.scalar() or 0
+
+                if invited_count > 0 and responded_count >= invited_count:
+                    from managers.quotation_handler import notify_all_quotes_ready
+                    await notify_all_quotes_ready(user_id, payload.request_id, session)
+            except Exception as e:
+                print(f"apis ::::: vendor_quote_response ::::: all quotes check failed: {e}")
 
         return {"success": True, "message": "Quote submitted successfully."}
     except Exception as e:

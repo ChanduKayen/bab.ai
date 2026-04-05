@@ -176,6 +176,78 @@ async def notify_user_quote_ready(
     #     )
 
 
+async def notify_user_vendor_opened(user_id: str, vendor_name: str) -> None:
+    """Ping the builder when a vendor opens their RFQ."""
+    if not user_id:
+        return
+    msg = f"👀 {vendor_name} opened your request — quote expected soon."
+    whatsapp_output(to_number=user_id, message_text=msg, message_type="plain")
+
+
+async def notify_builder_vendor_stalled(builder_id: str, vendor_name: str) -> None:
+    """Ping the builder when a vendor nudge is sent."""
+    if not builder_id:
+        return
+    msg = f"⏰ {vendor_name} hasn't responded yet. We've sent them a reminder."
+    whatsapp_output(to_number=builder_id, message_text=msg, message_type="plain")
+
+
+async def notify_all_quotes_ready(
+    user_id: str,
+    request_id: str,
+    session,
+) -> None:
+    """
+    Called when all invited vendors have responded.
+    Computes best price and fastest delivery, sends recommendation to builder.
+    """
+    if not user_id:
+        return
+
+    from sqlalchemy.future import select as sa_select
+    from database.models import VendorQuoteItem, MaterialRequestItem, Vendor as VendorModel
+
+    try:
+        result = await session.execute(
+            sa_select(
+                VendorQuoteItem.vendor_id,
+                VendorQuoteItem.quoted_price,
+                VendorQuoteItem.delivery_days,
+                VendorModel.name,
+            )
+            .join(VendorModel, VendorModel.vendor_id == VendorQuoteItem.vendor_id)
+            .where(VendorQuoteItem.quote_request_id == request_id)
+        )
+        rows = result.all()
+
+        if not rows:
+            return
+
+        best = min(rows, key=lambda r: float(r.quoted_price or 0))
+        with_days = [r for r in rows if r.delivery_days is not None]
+        fastest = min(with_days, key=lambda r: r.delivery_days) if with_days else None
+
+        count = len(set(r.vendor_id for r in rows))
+        best_line = f"Best price: {best.name} at ₹{best.quoted_price}"
+        fast_line = f"Fastest: {fastest.name}, {fastest.delivery_days} days" if fastest else ""
+
+        parts = [p for p in [best_line, fast_line] if p]
+        msg = f"All {count} quotes in. {'. '.join(parts)}. Tap to compare."
+
+        url = _quote_summary_url(str(request_id))
+        whatsapp_output(
+            to_number=user_id,
+            message_text=msg,
+            message_type="button",
+            extra_data=[
+                {"id": "compare_approve", "title": "Compare & Approve →"},
+                {"id": "view_dashboard",  "title": "View Orders 📋"},
+            ],
+        )
+    except Exception as e:
+        print(f"quotation_handler ::::: notify_all_quotes_ready ::::: exception: {e}")
+
+
 async def handle_quote_flow(
     state: dict,
     user_id: str,
@@ -429,6 +501,8 @@ async def notify_user_vendor_quote_update(
         f"{icon} {vendor_label} has {verb} prices for {project_line}.",
         "Review all quotes below to compare vendors.",
     ]
+    if not is_update:
+        message_lines[0] = f"🎉 First quote in from {vendor_label}! Tap below to track progress."
 
     url = _quote_summary_url(request_id)
     if url:
@@ -582,6 +656,8 @@ async def notify_user_vendor_quote_update(
         f"{icon} {vendor_label} has {verb} prices for {project_line}.",
         "Review all quotes below to compare vendors.",
     ]
+    if not is_update:
+        message_lines[0] = f"🎉 First quote in from {vendor_label}! Tap below to track progress."
 
     url = _quote_summary_url(request_id)
     if url:

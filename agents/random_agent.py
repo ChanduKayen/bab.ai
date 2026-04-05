@@ -571,10 +571,29 @@ _This information helps me personalise your experience_"""
                 state.update(
                     latest_respons=msg,
                     uoc_next_message_type="button",
-                    uoc_question_type="onboarding",              
+                    uoc_question_type="onboarding",
                     needs_clarification=True,
                     uoc_next_message_extra_data=[{"id": cta_id, "title": cta_title}],
                 )
+
+                # If builder has active orders, append subtle navigation menu
+                if (state.get("active_material_request_id") or
+                        state.get("builder_mode") == "followup"):
+                    current_extra = state.get("uoc_next_message_extra_data")
+                    # Only add menu if response is plain text (no existing buttons)
+                    if not current_extra:
+                        state.update(
+                            uoc_next_message_type="list",
+                            uoc_next_message_extra_data=[{
+                                "title": "What can I help with?",
+                                "rows": [
+                                    {"id": "view_dashboard",      "title": "View order status"},
+                                    {"id": "order_status",        "title": "Last 3 orders"},
+                                    {"id": "guided_photo_upload", "title": "New requirement"},
+                                ]
+                            }]
+                        )
+
                 return state
 
             except Exception as e:

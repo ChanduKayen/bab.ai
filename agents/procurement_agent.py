@@ -1027,8 +1027,47 @@ async def run_procurement_agent(state: dict,  config: dict) -> dict:
     if intent_context.lower() == "quote_followup" or intent_context.lower() == "status":
          print("Procurement Agent:::: run_procurement_agent : The user is trying to follow up on quote requests")
          state = await handle_followup_on_quotes(state, crud)
-         state["intent_context"]="" #clear context after consuming it 
+         state["intent_context"]="" #clear context after consuming it
          return state
+    if intent_context.lower() == "order_status":
+        print("Procurement Agent:::: run_procurement_agent : order status lookup")
+        async with AsyncSessionLocal() as session:
+            from managers.order_context import OrderContextService
+            ocs = OrderContextService(session)
+            orders = await ocs.get_orders_for_sender(state.get("sender_id"))
+
+        active = orders.get("active", [])
+        draft = orders.get("draft", [])
+        fulfilled = orders.get("fulfilled", [])
+
+        total = len(active) + len(draft) + len(fulfilled)
+        if total == 0:
+            msg = "No orders yet. Send a photo or type your material list to get started."
+            state.update(
+                latest_respons=msg,
+                uoc_next_message_type="button",
+                uoc_next_message_extra_data=[{"id": "guided_photo_upload", "title": "📷 New Requirement"}],
+                needs_clarification=True,
+            )
+        else:
+            lines = []
+            for o in active[:3]:
+                lines.append(f"🟡 Active — {o.get('material_count', 0)} items, {o.get('status', '')}")
+            for o in fulfilled[:2]:
+                lines.append(f"✅ Fulfilled — {o.get('material_count', 0)} items")
+            summary = "\n".join(lines) if lines else "No recent activity."
+            msg = f"Here are your recent orders:\n\n{summary}"
+            state.update(
+                latest_respons=msg,
+                uoc_next_message_type="button",
+                uoc_next_message_extra_data=[
+                    {"id": "view_dashboard", "title": "View All Orders 📋"},
+                    {"id": "guided_photo_upload", "title": "📷 New Requirement"},
+                ],
+                needs_clarification=True,
+            )
+        state["intent_context"] = ""
+        return state
         # ---------- 0 · Button click (id) ---------------------------
     if last_msg.lower() in _HANDLER_MAP:
         return await _HANDLER_MAP[last_msg.lower()](state,  config, state.get("uoc_next_message_extra_data", []))
