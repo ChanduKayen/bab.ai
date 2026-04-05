@@ -774,6 +774,11 @@ async def handle_whatsapp_event(data: dict):
             elif q_type == "procurement":
                 print("Webhook :::::: whatsapp_webhook::::: q_type = procurement :::: The set question type is procurement, so calling ??collect_procurement_details_interactively?? --", state["uoc_question_type"])
                 followups_state = await collect_procurement_details_interactively(state)
+                save_state(sender_id, followups_state)
+                response_msg = followups_state.get("latest_response", "")
+                message_type = followups_state.get("uoc_next_message_type", "plain")
+                extra_data = followups_state.get("uoc_next_message_extra_data", None)
+                whatsapp_output(sender_id, response_msg, message_type=message_type, extra_data=extra_data)
                 return {"status": "done", "reply": response_msg}
                
             elif q_type== "procurement_new_user_flow":

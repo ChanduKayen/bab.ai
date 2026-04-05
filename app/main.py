@@ -54,10 +54,22 @@ from app.routers import items
 from app.logging_config import logger
 
 # CORS
+# Read allowed origins from environment variable
+# Format: comma-separated list e.g. "https://thirtee.in,https://www.thirtee.in"
+_cors_origins_raw = os.getenv("ALLOWED_ORIGINS", "")
+_allowed_origins = [o.strip() for o in _cors_origins_raw.split(",") if o.strip()]
+
+# Fall back to permissive config only in development
+if not _allowed_origins:
+    _allowed_origins = ["*"]
+    _allow_credentials = False
+else:
+    _allow_credentials = True
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
+    allow_origins=_allowed_origins,
+    allow_credentials=_allow_credentials,
     allow_methods=["*"],
     allow_headers=["*"],
 )

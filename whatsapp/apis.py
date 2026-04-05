@@ -94,8 +94,11 @@ async def submit_order(payload: SubmitOrderRequest):
             uoc_crud = UocCRUD(session)
             project_id = payload.project.id or None
             #Update request metadata
-            if (payload.status!="DRAFT"):
-                return
+            if payload.status != "DRAFT":
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Order must be in DRAFT status to submit. Current status: {payload.status}"
+                )
             
             # Project handling policy for material requests:
             # - If an ID is present: do NOT modify existing project details.
