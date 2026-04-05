@@ -398,7 +398,42 @@ class ProcurementCRUD:
         except SQLAlchemyError as e:
             print("procurement_crud ::::: Error in get_sender_id_from_request ::::", e)
             raise
-    
+
+    async def get_latest_submitted_request(self, sender_id: str) -> Optional[Dict]:
+        """
+        Returns the most recently submitted request for a sender,
+        including the names of vendors invited for that request.
+        """
+        try:
+            result = await self.session.execute(
+                select(MaterialRequest)
+                .where(
+                    MaterialRequest.sender_id == sender_id,
+                    MaterialRequest.status == RequestStatus.REQUESTED
+                )
+                .order_by(MaterialRequest.updated_at.desc())
+                .limit(1)
+            )
+            req = result.scalar_one_or_none()
+            if not req:
+                return None
+
+            vendor_result = await self.session.execute(
+                select(Vendor.name)
+                .join(QuoteRequestVendor, QuoteRequestVendor.vendor_id == Vendor.vendor_id)
+                .where(QuoteRequestVendor.quote_request_id == req.id)
+            )
+            vendor_names = [row[0] for row in vendor_result.all()]
+
+            return {
+                "request_id": str(req.id),
+                "vendor_names": vendor_names,
+                "item_count": len(req.items) if req.items else 0
+            }
+        except Exception as e:
+            print("procurement_crud ::::: get_latest_submitted_request ::::: exception :", e)
+            raise
+
     async def sync_material_request_items_by_ids(
         self,
         request_id: str,                       # UUID string OK

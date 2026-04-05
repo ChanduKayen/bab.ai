@@ -758,59 +758,34 @@ async def new_user_flow(state: AgentState, crud: ProcurementCRUD  ) -> AgentStat
             state["latest_respons"] = "Sorry, there was an error saving your procurement request. Please try again later."
             return state
         
-        try:  
+        try:
+            # Count uncertain items (marked with *)
+            uncertain = sum(1 for it in items if it.get("material", "").startswith("*"))
+            total = len(items)
 
-            review_order_url_response = f"""*Your request is ready for review*
+            # Build 1-line summary — count + up to 2 names
+            sample_names = [
+                it.get("material", "").lstrip("*").strip()
+                for it in items[:2]
+            ]
+            sample_text = ", ".join(sample_names)
+            if total > 2:
+                sample_text += f" and {total - 2} more"
 
-*Summary:* Requested {len(items)} materials.
+            if uncertain > 0:
+                msg = f"Found {total} items — {sample_text}. {uncertain} need a quick check. Tap to review."
+            else:
+                msg = f"Found {total} items — {sample_text}. Tap to review and select vendors."
 
-Now you may edit your list, and proceed to get quotations from trusted vendors.
-
-
-            """
-           # Holding the image generation part here
-            # path = generate_review_order_card(
-            #     out_dir=str(UPLOAD_IMAGES_DIR),
-            #     variant="waba_header2x",  # 1600x836 (2x 800x418)
-            #     brand_name="bab-ai.com Procurement System",
-            #     brand_pill_text="Procurement",
-            #     heading="Review Order",
-            #     site_name="AS Elite, Kakinada",
-            #     order_id="MR-08A972B5",
-            #     items_count_text="3 materials",
-            #     delivery_text="Fri, 22 Aug",
-            #     quotes_text="3 in (best ₹—)",
-            #     payment_text="Credit available",
-            #     items=items,
-            #     total_value="₹ 3,45,600",
-            #     total_subnote="incl. GST • freight extra",
-            #     quotes_ready_count=3,
-            # )
-
-            # media_id = upload_media_from_path( path, "image/jpeg")
-            await handle_order_edit(state, crud, latest_response="", uoc_next_message_extra_data=None)
-
-            #Skipping this below step to directly provide the edit link
-
-        #     state.update({
-        #         "latest_respons": review_order_url_response,
-        #         "uoc_next_message_type": "button",
-        #         "uoc_question_type": "procurement_new_user_flow",
-        #         #"uoc_next_message_extra_data": {"display_text": "Review Order", "url": review_order_url},
-        #         "uoc_next_message_extra_data": {"buttons":  [
-        #              {"id": "edit_order", "title": "Review & Confirm →"},
-        #              {"id": "help", "title": "What is this? 🤔"},
-        #             #{"id": "rfq", "title": "Confirm & Get Quotes"},
-        #             #{"id": "credit_use", "title": "Buy with Credit"},
-        #         ]
-        #         #,
-        #         #"media_id": media_id,   --Temporarily disabling content media
-        #         #"media_type": "image",
-        #         },
-        #         "needs_clarification": True,
-        #         "active_material_request_id": state["active_material_request_id"],
-        #         "agent_first_run": False,
-        #     })
+            state.update(
+                latest_respons=msg,
+                uoc_next_message_type="button",
+                uoc_next_message_extra_data=[
+                    {"id": "edit_order", "title": "Review & Select Vendors →"}
+                ],
+                needs_clarification=True,
+                agent_first_run=False,
+            )
         except Exception as e:
             print("Procurement Agent:::: new_user_flow : Error in fetching review order:", e)
         

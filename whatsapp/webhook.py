@@ -462,7 +462,27 @@ async def handle_whatsapp_event(data: dict):
             text = msg["text"]["body"]
             state["messages"].append({"role": "user", "content": text})
             state["msg_type"] = "text"
-        
+
+            # Return journey from portal
+            if text == "order_confirmed":
+                async with AsyncSessionLocal() as session:
+                    from database.procurement_crud import ProcurementCRUD
+                    crud = ProcurementCRUD(session)
+                    recent = await crud.get_latest_submitted_request(sender_id)
+                if recent:
+                    vendor_names = recent.get("vendor_names", [])
+                    vendor_list = ", ".join(vendor_names[:3]) if vendor_names else "your vendors"
+                    count = len(vendor_names)
+                    confirm_msg = f"✅ Sent to {count} vendor{'s' if count != 1 else ''} — {vendor_list}. I'll ping you when quotes arrive."
+                else:
+                    confirm_msg = "✅ Request sent. I'll notify you when vendors respond."
+                state["needs_clarification"] = True
+                state["uoc_question_type"] = "procurement_new_user_flow"
+                save_state(sender_id, state)
+                whatsapp_output(sender_id, confirm_msg, message_type="button",
+                                extra_data=[{"id": "view_dashboard", "title": "View Orders 📋"}])
+                return {"status": "done", "reply": confirm_msg}
+
         elif msg_type == "image":
             media_id = msg["image"]["id"]
             caption = msg["image"].get("caption", "")
