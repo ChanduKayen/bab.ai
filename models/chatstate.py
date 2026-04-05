@@ -39,4 +39,6 @@ class AgentState(TypedDict):
     intent_context:Optional[str]
     last_known_intent:Optional[str]
 
-    #credit_id:Optional[str]   
+    #credit_id:Optional[str]
+    builder_mode: Optional[str]           # "idle" | "followup" | "comparing" | "casual"
+    show_dashboard_button: Optional[bool]   

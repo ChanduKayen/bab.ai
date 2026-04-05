@@ -437,7 +437,6 @@ async def handle_whatsapp_event(data: dict):
             }
         else:
             state["user_full_name"] = user_name
-            state["user_stage"] = "new" 
             
             
  
